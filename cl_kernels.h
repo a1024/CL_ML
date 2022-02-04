@@ -107,15 +107,13 @@ __kernel void conv11		(__global float *src, __global float *dst, __constant int 
 {
 	int idx=get_global_id(0);
 	int nchin=indices[II_Cin],
-		win=indices[II_Win], hin=indices[II_Hin],
+		win=indices[II_Win], hin=indices[II_Hin], chsize=win*hin,
 		wout=indices[II_Wout], hout=indices[II_Hout];
 	int xout=idx%wout, yout=idx/wout%hout, kcout=idx/(wout*hout);
-	int xin=xout<<indices[II_logstride], yin=yout<<indices[II_logstride];
-	int kcin;
+	int xin=xout<<indices[II_logstride], yin=yout<<indices[II_logstride], kcin;
 
 	__global float *filt=weights+(nchin+1)*kcout;
 	float result=filt[nchin];//bias
-	int chsize=win*hin;
 	__global float *px=src+win*yin+xin;
 
 	for(kcin=0;kcin<indices[II_Cin];++kcin, px+=chsize)
@@ -127,19 +125,17 @@ __kernel void conv_zp		(__global float *src, __global float *dst, __constant int
 {
 	int idx=get_global_id(0);
 	int nchin=indices[II_Cin],
-		win=indices[II_Win], hin=indices[II_Hin],
+		win=indices[II_Win], hin=indices[II_Hin], chsize=win*hin,
 		wout=indices[II_Wout], hout=indices[II_Hout],
 		wk=indices[II_Wk], hk=indices[II_Hk];
 	int xout=idx%wout, yout=idx/wout%hout, kcout=idx/(wout*hout);
-	int xin=xout<<indices[II_logstride], yin=yout<<indices[II_logstride];
+	int xin=xout<<indices[II_logstride], yin=yout<<indices[II_logstride], kcin;
 	int xsstart, xsend, ysstart, ysend;
 	int xfstart, xfend, yfstart, yfend;
-	int kcin;
 
 	int convsize=nchin*wk*hk;
 	__global float *filt=weights+(convsize+1)*kcout;
 	float result=filt[convsize];//bias
-	int chsize=win*hin;
 	__global float *px=src;
 
 	xsstart	=xin-(wk>>1);	if(xsstart<0)xfstart=-xsstart, xsstart=0;		else xfstart=0;

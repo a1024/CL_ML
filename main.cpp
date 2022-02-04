@@ -606,10 +606,22 @@ void			print_GPU_usage()
 	}
 	printf("Using %.2lf %s of GPU memory\n", units, a);
 }
-void			print_GPU_buffer(CLBuffer buf, int w, int h)
+void			print_GPU_buffer(CLBuffer buf, int nc, int w, int h)
 {
-	auto temp=buf.read_sub(0, w*h);
+	auto size=nc*w*h;
+	auto temp=buf.read_sub(0, size);
 	printf("\n");
+
+	float vmin=temp[0], vmax=temp[0];
+	for(int k=0;k<size;++k)
+	{
+		if(vmin>temp[k])
+			vmin=temp[k];
+		if(vmax<temp[k])
+			vmax=temp[k];
+	}
+	printf("min=%f, max=%f\n", vmin, vmax);
+
 	PRINT_CORNER(temp, w, h);
 	delete[] temp;
 }
@@ -796,8 +808,8 @@ int				main(int argc, char **argv)
 	load_image(input.c_str(), buffer, iw, ih);
 	int tch=datadim[0].nch, tw=datadim[0].w, th=datadim[0].h, ttotal=tch*tw*th;
 	auto src=new float[ttotal];
-	float stdev[]={0.229, 0.224, 0.225};
-	float mean[]={0.485, 0.456, 0.406};
+	float stdev[]={0.229f, 0.224f, 0.225f};
+	float mean[]={0.485f, 0.456f, 0.406f};
 	scale_nearest(buffer, iw, ih, src, tw, th, mean, stdev);
 	//make_input(buffer, iw, ih, 48, 159, tw, th, src);
 	PRINT_CORNER(src, tw, th);
@@ -845,7 +857,7 @@ int				main(int argc, char **argv)
 		auto &info=winfo[layer.info[0]];
 		argbuf[3]=cweights[kl];//weights
 #if 0
-		print_GPU_buffer(ct1, inshape.w, inshape.h);//
+		print_GPU_buffer(ct1, inshape.nch, inshape.w, inshape.h);//
 #endif
 		//if(kl==36)//
 		//	printf("%s: worksize=%d\nargbuf: %p %p %p %p\n", layer.to_string().c_str(), outshape.nch*outshape.w*outshape.h, argbuf[0], argbuf[1], argbuf[2], argbuf[3]);
@@ -926,8 +938,8 @@ int				main(int argc, char **argv)
 			argbuf[1]=ct2;//dst
 			break;
 		}
-#if 1
-		print_GPU_buffer(ct1, outshape.w, outshape.h);//
+#if 0
+		print_GPU_buffer(ct1, outshape.nch, outshape.w, outshape.h);//
 #endif
 		if(save_internals)//save the output of each relu
 	//	if(save_internals&&layer.type==L_RELU)//save the output of each relu
