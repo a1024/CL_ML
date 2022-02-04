@@ -34,8 +34,14 @@ bool			save_weights_bin(const float *weights, int count, const char *filename, W
 void			load_weights_bin(std::string const &path, const char *filename, WeightInfo const &winfo, std::vector<float> &weights);
 
 
-//imagenet1000 classes
-struct			ResultClass
+//ML
+enum			WeightFileLabel
+{
+#define			WNAME(NFILT, NCHAN, WIDTH, HEIGHT, PAD, STRIDE, FILENAME, LABEL)		LABEL,
+#include		"names_resnet18.h"
+#undef			WNAME
+};
+struct			ResultClass//imagenet1000 classes
 {
 	int idx;
 	const char *name;
@@ -48,12 +54,5 @@ void			abac2_encode(const void *src, int imsize, int depth, int bytestride, std:
 void			abac2_decode(const char *data, const int *sizes, const int *conf, void *dst, int imsize, int depth, int bytestride, bool loud);
 
 int				abac2_estimate(const void *src, int imsize, int depth, int bytestride, int *out_sizes, int *out_conf, bool loud);
-
-enum			WeightFileLabel
-{
-#define			WNAME(NFILT, NCHAN, WIDTH, HEIGHT, PAD, STRIDE, FILENAME, LABEL)		LABEL,
-#include		"names_resnet18.h"
-#undef			WNAME
-};
 
 #endif
