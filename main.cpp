@@ -759,7 +759,7 @@ int				main(int argc, char **argv)
 	printf("Weights path: %s\n", wpath.c_str());
 
 #if 1
-	if(!strcmp(argv[1], "weights"))
+	if(argc>1&&!strcmp(argv[1], "weights"))
 	{
 		//wpath="E:/ML/resnet18/";//
 		prompt("About to convert weights from text files to binary...");
