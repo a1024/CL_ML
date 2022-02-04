@@ -566,12 +566,29 @@ size_t			load_all_weights_bin(std::string const &wpath, std::vector<vec> &weight
 	weights.resize(nlayers);
 	for(int k=0;k<nlayers;++k)
 	{
+		printf("\rLoading weights %d / %d [%.2lf%%]...", k+1, nlayers, 100.*(k+1)/nlayers);
 		auto &wk=weights[k];
 		auto &layer=resnet18[k];
 		if(layer.type==L_CONV||layer.type==L_RES_SAVE_DS||layer.type==L_LINEAR)
+		{
 			load_weights_bin(wpath, layer.filename, winfo[layer.info[0]], wk);
+#if 0
+			auto &info=winfo[resnet18[k].info[0]];
+			float sum=0, vmin=wk[0], vmax=wk[0];
+			for(int k2=0;k2<(int)wk.size();++k2)
+			{
+				sum+=wk[k2];
+				if(vmin>wk[k2])
+					vmin=wk[k2];
+				if(vmax<wk[k2])
+					vmax=wk[k2];
+			}
+			printf("%3d: %d x %dx%dx%d: sum=%f min=%f, max=%f\n", k, info.nfilt, info.nchan, info.w, info.h, sum, vmin, vmax);
+#endif
+		}
 		nparams+=wk.size();
 	}
+	printf("\n");
 	return nparams;
 }
 void			send_all_weights_to_GPU(std::vector<vec> &weights, std::vector<CLBuffer> &cw)
@@ -856,9 +873,7 @@ int				main(int argc, char **argv)
 		auto &inshape=datadim[kl], &outshape=datadim[kl+1];
 		auto &info=winfo[layer.info[0]];
 		argbuf[3]=cweights[kl];//weights
-#if 0
-		print_GPU_buffer(ct1, inshape.nch, inshape.w, inshape.h);//
-#endif
+		//print_GPU_buffer(ct1, inshape.nch, inshape.w, inshape.h);//
 		//if(kl==36)//
 		//	printf("%s: worksize=%d\nargbuf: %p %p %p %p\n", layer.to_string().c_str(), outshape.nch*outshape.w*outshape.h, argbuf[0], argbuf[1], argbuf[2], argbuf[3]);
 		switch(layer.type)

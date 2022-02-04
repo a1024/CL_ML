@@ -330,7 +330,7 @@ bool			save_weights_bin(const float *weights, int count, const char *filename, W
 }
 void			load_weights_bin(std::string const &path, const char *filename, WeightInfo const &winfo, std::vector<float> &weights)
 {
-	printf("Loading  %s...\n", filename);
+	//printf("Loading  %s...\n", filename);
 	std::string str=path+filename;
 	bool success=open_bin(str.c_str(), str);
 	MY_ASSERT(success, "Couldn't open \'%s\'", filename);
@@ -345,5 +345,5 @@ void			load_weights_bin(std::string const &path, const char *filename, WeightInf
 	totalsize/=sizeof(float);
 	weights.resize(totalsize);
 	memcpy(weights.data(), data+sizeof(ConvFileHeader), totalsize*sizeof(float));
-	printf("%s loaded.\n", filename);
+	//printf("%s loaded.\n", filename);
 }
