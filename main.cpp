@@ -424,9 +424,9 @@ Layer			resnet18[]=
 	{L_LINEAR, {FC_WEIGHT, FC_BIAS}, "fc.bin"},
 };
 const int		nlayers=SIZEOF(resnet18);
-void			scale_nearest(const int *src, int sw, int sh, float *dst, int dw, int dh)
+void			scale_nearest(const int *src, int sw, int sh, float *dst, int dw, int dh, const float *mean, const float *stdev)
 {
-	float gain=1.f/128;
+	float gain=1.f/255;
 	int outsize=dw*dh;
 	auto r=dst, g=r+outsize, b=g+outsize;
 	for(int ky=0, idx=0;ky<dh;++ky)
@@ -434,9 +434,9 @@ void			scale_nearest(const int *src, int sw, int sh, float *dst, int dw, int dh)
 		for(int kx=0;kx<dw;++kx, ++idx)
 		{
 			auto p=(unsigned char*)(src+sw*(ky*sh/dh)+kx*sw/dw);
-			r[idx]=(p[0]-128)*gain;
-			g[idx]=(p[1]-128)*gain;
-			b[idx]=(p[2]-128)*gain;
+			r[idx]=(p[0]*gain-mean[0])/stdev[0];
+			g[idx]=(p[1]*gain-mean[1])/stdev[1];
+			b[idx]=(p[2]*gain-mean[2])/stdev[2];
 		}
 	}
 }
@@ -477,7 +477,8 @@ void			make_input(const int *buffer, int bw, int bh, int x0, int y0, int dx, int
 }
 
 typedef std::vector<size_t> vecs;
-void			set_idxbuf(CLBuffer ci, int *indices, DataDim const &in, DataDim const &out, int wk, int hk, int logstride, int debug_flag=false)
+//void			set_idxbuf(CLBuffer ci, int *indices, DataDim const &in, DataDim const &out, int wk, int hk, int logstride, int debug_flag=false)
+void			set_idxbuf(CLBuffer ci, int *indices, DataDim const &in, DataDim const &out, int wk, int hk, int logstride)
 {
 	indices[II_Cin]=in.nch;
 	indices[II_Win]=in.w;
@@ -493,8 +494,8 @@ void			set_idxbuf(CLBuffer ci, int *indices, DataDim const &in, DataDim const &o
 	indices[II_Wk]=wk;
 	indices[II_Hk]=hk;
 
-	if(debug_flag)//
-		indices[II_Cout]=0;//
+	//if(debug_flag)//
+	//	indices[II_Cout]=0;//
 
 	ci.write(indices);
 
@@ -540,6 +541,12 @@ void			convert_all_weights_txt2bin(std::string const &wpath)
 				resultweights.insert(resultweights.begin(), kernel, kernel+chsize);
 				resultweights.push_back(bias);
 			}
+
+			//printf("First %dx%dx%d+1=%d filter CPU:\n", info.nchan, info.w, info.h, chsize+1);
+			//for(int k=0;k<chsize+1;++k)//
+			//	printf("%f\n", resultweights[k]);//
+			//prompt("Continue?");
+
 			auto success=save_weights_bin(resultweights.data(), (int)resultweights.size(), layer.filename, winfo[layer.info[0]], BINFILE_CONV);
 			MY_ASSERT(success, "Couldn't save %s", layer.filename);
 		}
@@ -729,7 +736,6 @@ int				main(int argc, char **argv)
 	}
 #endif
 
-#if 1
 #ifdef __ANDROID__
 	wpath="/data/data/com.termux/files/home/cpp/resnet18/";
 //#elif defined __linux__
@@ -788,7 +794,9 @@ int				main(int argc, char **argv)
 	load_image(argv[1], buffer, iw, ih);
 	int tch=datadim[0].nch, tw=datadim[0].w, th=datadim[0].h, ttotal=tch*tw*th;
 	auto src=new float[ttotal];
-	scale_nearest(buffer, iw, ih, src, tw, th);
+	float stdev[]={0.229, 0.224, 0.225};
+	float mean[]={0.485, 0.456, 0.406};
+	scale_nearest(buffer, iw, ih, src, tw, th, mean, stdev);
 	//make_input(buffer, iw, ih, 48, 159, tw, th, src);
 	PRINT_CORNER(src, tw, th);
 	
@@ -864,8 +872,11 @@ int				main(int argc, char **argv)
 			break;
 		case L_CONV:
 			{
-				set_idxbuf(ci, indices, inshape, outshape, info.w>>1, info.h>>1, floor_log2(info.stride), kl==36);//
-			//	set_idxbuf(ci, indices, inshape, outshape, info.w>>1, info.h>>1, floor_log2(info.stride));
+				//set_idxbuf(ci, indices, inshape, outshape, info.w, info.h, floor_log2(info.stride), kl==36);//
+				set_idxbuf(ci, indices, inshape, outshape, info.w, info.h, floor_log2(info.stride));
+				//for(int k=0;k<II_bufsize;++k)//
+				//	printf("%d ", indices[k]);
+				//printf("\n");//
 				int k_idx=0;
 				switch(info.w)
 				{
@@ -881,6 +892,7 @@ int				main(int argc, char **argv)
 				std::swap(ct1, ct2);
 				argbuf[0]=ct1;//src
 				argbuf[1]=ct2;//dst
+				prompt("Continue?\n");
 			}
 			break;
 		case L_RELU:
@@ -943,22 +955,6 @@ int				main(int argc, char **argv)
 	delete[] result;
 #endif
 	
-//	auto data0=ct2.read_sub(0, datadim[0].total);
-//	int w0=datadim[0].w+datadim[0].pad*2, h0=datadim[0].h+datadim[0].pad*2, nch0=datadim[0].nch;
-//	PRINT_CORNER(data0, w0, h0);
-//	save_data_rgb(data0, w0, h0, nch0);
-//	//print_data(data0, w0, h0, 0, w0, 0, h0, "Padded data");
-//	exit_success();//
-
-	//int ii=0;
-	//set_idxbuf(indices, datadim[0], datadim[1], (int)allidx[ii], 0, 1);
-	//ci.write(indices);
-	//argbuf[0]=ct1;
-	//argbuf[1]=ct2;
-	//argbuf[2]=cw;
-	//argbuf[3]=ci;
-	//kernels[OCL_conv_n77_zp].call(datadim[1].worksize(), argbuf, 4);
-	
 	for(int k=0;k<(int)cweights.size();++k)
 		cweights[k].release();
 	//cw.release();
@@ -970,30 +966,6 @@ int				main(int argc, char **argv)
 
 	delete[] src;
 	free(buffer);
-	
-	//int s0=weights.size();
-	//weights.resize(s0+(w0.size()<<1));
-	//lincoeff(w0, b0, mean0, var0, weights.data()+s0
-	
-	//std::vector<float> weight0, bias0, mean0, var0;
-	//int size;
-	//load_gains(weightspath, "layer1.0.bn1.weight.txt", weight0, size);
-	//MY_ASSERT(size==64, "");
-	//load_gains(weightspath, "layer1.0.bn1.bias.txt", bias0, size);
-	//MY_ASSERT(size0==size1, "");
-
-	//get_path(weightspath, "Weights folder: ");
-
-	//int nfilters=0, nchannels=0, w=0, h=0;
-	//std::vector<float> l1c1;
-	//load_weights(weightspath, "layer1.0.conv1.weight.txt", l1c1, nfilters, nchannels, w, h);
-
-	//std::string inpath, outpath;
-	//get_path(inpath, "Input folder: ");
-	//get_path(outpath, "Output folder: ");
-	//ocl_init("cl_kernels.h");
-	//ocl_finish();
-#endif
 
 	exit_success();
 	return 0;

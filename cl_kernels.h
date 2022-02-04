@@ -124,32 +124,47 @@ __kernel void conv11		(__global float *src, __global float *dst, __constant int 
 __kernel void conv_zp		(__global float *src, __global float *dst, __constant int *indices, __global float *weights)
 {
 	int idx=get_global_id(0);
-	int win=indices[II_Win], hin=indices[II_Hin], wout=indices[II_Wout], hout=indices[II_Hout], wk=indices[II_Wk], hk=indices[II_Hk];
+	int nchin=indices[II_Cin],
+		win=indices[II_Win], hin=indices[II_Hin],
+		wout=indices[II_Wout], hout=indices[II_Hout],
+		wk=indices[II_Wk], hk=indices[II_Hk];
 	int xout=idx%wout, yout=idx/wout%hout, kcout=idx/(wout*hout);
 	int xin=xout<<indices[II_logstride], yin=yout<<indices[II_logstride];
 	int xsstart, xsend, ysstart, ysend;
 	int xfstart, xfend, yfstart, yfend;
 	int kcin;
 
-	__global float *filt=weights+indices[II_Cin]*(wk*hk+1)*kcout;
-	float result=filt[wk*hk];//bias
+	int convsize=nchin*wk*hk;
+	__global float *filt=weights+(convsize+1)*kcout;
+	float result=filt[convsize];//bias
 	int chsize=win*hin;
 	__global float *px=src;
 
-	xsstart	=xin-wk;	if(xsstart<0)xfstart=-xsstart, xsstart=0;		else xfstart=0;
-	xsend	=xin+wk;	if(xsend>win)xfend=wk-(xsend-win), xsend=win;	else xfend=wk;
-	ysstart	=yin-hk;	if(ysstart<0)yfstart=-ysstart, ysstart=0;		else yfstart=0;
-	ysend	=yin+hk;	if(ysend>hin)yfend=hk-(ysend-hin), ysend=hin;	else yfend=hk;
-	for(kcin=0;kcin<indices[II_Cin];++kcin, px+=chsize)
+	xsstart	=xin-(wk>>1);	if(xsstart<0)xfstart=-xsstart, xsstart=0;		else xfstart=0;
+	xsend	=xin+(wk>>1);	if(xsend>win)xfend=wk-(xsend-win), xsend=win;	else xfend=wk;
+	ysstart	=yin-(hk>>1);	if(ysstart<0)yfstart=-ysstart, ysstart=0;		else yfstart=0;
+	ysend	=yin+(hk>>1);	if(ysend>hin)yfend=hk-(ysend-hin), ysend=hin;	else yfend=hk;
+	//if(idx==0)//
+	//{
+	//	printf("\n%d~%d, %d~%d\n", xsstart, xsend, ysstart, ysend);
+	//	for(int k=0;k<II_bufsize;++k)//
+	//		printf("%d ", indices[k]);
+	//	printf("%d", convsize);
+	//	printf("First %dx%dx%d+1=%d filter GPU:", nchin, wk, hk, convsize+1);
+	//	for(int k=0;k<convsize+1;++k)
+	//		printf("%f ", filt[k]);
+	//}
+	for(kcin=0;kcin<nchin;++kcin, px+=chsize, filt+=wk*hk)
 	{
 		for(int y=ysstart, ky=yfstart;y<ysend;++y, ++ky)
+		{
 			for(int x=xsstart, kx=xfstart;x<xsend;++x, ++kx)
+			{
+				//if(!idx)
+				//	printf("(c=%d, %d, %d)", kcin, kx, ky);
 				result+=filt[wk*ky+kx]*px[win*y+x];
-		//if(xin>0)
-		//	result+=filt[0]*px[-1];
-		//result+=filt[0]*px[0];
-		//if(xin<win-1)
-		//	result+=filt[0]*px[1];
+			}
+		}
 	}
 	//if(!indices[II_Cout]&&idx<100)
 	//	printf("row(%f, %f, %f) -> %f ", src[win*ysstart+xsstart], src[win*yin+xin], src[win*(ysend-1)+xsend-1], result);
