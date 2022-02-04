@@ -892,7 +892,7 @@ int				main(int argc, char **argv)
 				std::swap(ct1, ct2);
 				argbuf[0]=ct1;//src
 				argbuf[1]=ct2;//dst
-				prompt("Continue?\n");
+				//prompt("Continue?\n");
 			}
 			break;
 		case L_RELU:
