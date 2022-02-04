@@ -791,7 +791,9 @@ int				main(int argc, char **argv)
 
 
 	int *buffer=nullptr, iw=0, ih=0;
-	load_image(argv[1], buffer, iw, ih);
+	if(!input.size())
+		input=argv[1];
+	load_image(input.c_str(), buffer, iw, ih);
 	int tch=datadim[0].nch, tw=datadim[0].w, th=datadim[0].h, ttotal=tch*tw*th;
 	auto src=new float[ttotal];
 	float stdev[]={0.229, 0.224, 0.225};
@@ -924,7 +926,7 @@ int				main(int argc, char **argv)
 			argbuf[1]=ct2;//dst
 			break;
 		}
-#if 0
+#if 1
 		print_GPU_buffer(ct1, outshape.w, outshape.h);//
 #endif
 		if(save_internals)//save the output of each relu

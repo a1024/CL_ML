@@ -106,18 +106,20 @@ __kernel void avpool		(__global float *src, __global float *dst, __constant int 
 __kernel void conv11		(__global float *src, __global float *dst, __constant int *indices, __global float *weights)
 {
 	int idx=get_global_id(0);
-	int win=indices[II_Win], hin=indices[II_Hin], wout=indices[II_Wout], hout=indices[II_Hout];
+	int nchin=indices[II_Cin],
+		win=indices[II_Win], hin=indices[II_Hin],
+		wout=indices[II_Wout], hout=indices[II_Hout];
 	int xout=idx%wout, yout=idx/wout%hout, kcout=idx/(wout*hout);
 	int xin=xout<<indices[II_logstride], yin=yout<<indices[II_logstride];
 	int kcin;
 
-	__global float *filt=weights+indices[II_Cin]*2*kcout;
-	float result=filt[1];//bias
+	__global float *filt=weights+(nchin+1)*kcout;
+	float result=filt[nchin];//bias
 	int chsize=win*hin;
 	__global float *px=src+win*yin+xin;
 
 	for(kcin=0;kcin<indices[II_Cin];++kcin, px+=chsize)
-		result+=filt[0]*px[0];
+		result+=filt[kcin]*px[0];
 	dst[idx]=result;
 	//dst[wout*(hout*kcout+yout)+xout]=result;
 }
