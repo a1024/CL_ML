@@ -1,0 +1,17 @@
+PROGRAM=ml64
+
+SRCS=$(wildcard *.cpp)
+HEADERS=$(wildcard *.h)
+OBJS=$(patsubst %.cpp, %.o, $(SRCS))
+FLAGS=-I/data/data/com.termux/files/home/cpp/OpenCL-Headers
+
+.PHONY:	all clean
+
+debug:	$(OBJS)
+	$(CXX) $(OBJS) -o $(PROGRAM) -L/system/vendor/lib64 -lOpenCL
+
+$(OBJS):	$(SRCS)
+	$(CXX) -g $(FLAGS) -c $?
+
+clean:
+	$(RM) $(PROGRAM) $(OBJS)

@@ -1,0 +1,30 @@
+PROGRAM=ml64
+
+SRCS=$(wildcard *.cpp)
+HEADERS=$(wildcard *.h)
+OBJS=$(patsubst %.cpp, %.o, $(SRCS))
+
+#please download the OpenCL headers from
+#https://github.com/KhronosGroup/OpenCL-Headers
+#and set the path to OpenCL headers here:
+CXXFLAGS=-ID:/Android/!-Lib/OpenCL-Headers-master
+#CXXFLAGS=-I/data/data/com.termux/files/home/cpp/OpenCL-Headers
+
+
+#use static linking...
+#CXXFLAGS+=-DOCL_STATIC_LINK
+#LIBFLAGS=-L/system/vendor/lib64 -lOpenCL
+#...or dynamic linking
+LIBFLAGS=
+
+
+.PHONY:	all clean
+
+debug:	$(OBJS)
+	$(CXX) $(OBJS) -o $(PROGRAM) $(LIBFLAGS)
+
+$(OBJS):	$(SRCS)
+	$(CXX) -g $(CXXFLAGS) -c $?
+
+clean:
+	$(RM) $(PROGRAM) $(OBJS)
