@@ -270,10 +270,11 @@ struct			DataDim
 	int w, h;
 	int total;
 	DataDim():nch(0), w(0), h(0), total(0){}
-	//void calc_total()
-	//{
-	//	total=nch*(w+2*pad)*(h+2*pad);
-	//}
+	void calc_total()
+	{
+		total=nch*w*h;
+		//total=nch*(w+2*pad)*(h+2*pad);
+	}
 	DataDim(short nch, int w, int h):nch(nch), w(w), h(h)
 	{
 		total=nch*w*h;
@@ -286,11 +287,11 @@ struct			DataDim
 		total=nch*w*h;
 		//calc_total();
 	}
-	size_t worksize()
-	{
-		return total;
-		//return nch*w*h;
-	}
+	//size_t worksize()
+	//{
+	//	return nch*w*h;
+	//	//return total;
+	//}
 	void set_in(int *indices)
 	{
 		indices[II_Cin]=nch;
@@ -503,6 +504,38 @@ void			set_idxbuf(CLBuffer ci, int *indices, DataDim const &in, DataDim const &o
 	//	printf("%d ", indices[k]);
 	//printf("\n");
 }
+void			print_idxbuf(int *indices)
+{
+	printf("\n");
+#define		PRINT(LABEL)	printf("%s = %d\n", #LABEL, indices[LABEL])
+	PRINT(II_Cin);
+	PRINT(II_Win);
+	PRINT(II_Hin);
+	PRINT(II_Cout);
+	PRINT(II_Wout);
+	PRINT(II_Hout);
+	PRINT(II_logstride);
+	PRINT(II_Wk);
+	PRINT(II_Hk);
+	PRINT(II_bufsize);
+#undef		PRINT
+	printf("\n");
+}
+void			calc_mean_var(float *data, int size, float &mean, float &stddev)
+{
+	mean=0;
+	for(int k=0;k<size;++k)
+		mean+=data[k];
+	mean/=size;
+
+	stddev=0;
+	for(int k=0;k<size;++k)
+	{
+		float val=data[k]-mean;
+		stddev+=val*val;
+	}
+	stddev=sqrt(stddev/size);
+}
 
 void			convert_all_weights_txt2bin(std::string const &wpath)
 {
@@ -538,9 +571,19 @@ void			convert_all_weights_txt2bin(std::string const &wpath)
 				auto kernel=convweights.data()+chsize*kc;
 				for(int k=0;k<chsize;++k)
 					kernel[k]*=gain;
-				resultweights.insert(resultweights.begin(), kernel, kernel+chsize);
+				resultweights.insert(resultweights.end(), kernel, kernel+chsize);
 				resultweights.push_back(bias);
 			}
+#if 0
+			for(int kc=0;kc<info.nfilt;++kc)
+			{
+				float mean=0, stddev=0;
+				float *filter=resultweights.data()+(chsize+1)*kc;
+				calc_mean_var(filter, chsize, mean, stddev);
+				printf("%f\t%f\n", mean, stddev);
+			}
+			prompt("Continue?");
+#endif
 
 			//printf("First %dx%dx%d+1=%d filter CPU:\n", info.nchan, info.w, info.h, chsize+1);
 			//for(int k=0;k<chsize+1;++k)//
@@ -557,6 +600,101 @@ void			convert_all_weights_txt2bin(std::string const &wpath)
 			load_txt_gains(wpath, winfo[layer.info[1]], resultweights);
 			auto success=save_weights_bin(resultweights.data(), (int)resultweights.size(), layer.filename, winfo[layer.info[0]], BINFILE_LINEAR);
 			MY_ASSERT(success, "Couldn't save %s", layer.filename);
+		}
+	}
+}
+struct			SizeFactorization
+{
+	int size;
+	short w, h;
+};
+SizeFactorization factorize_size(int size)
+{
+	SizeFactorization factorizations[]=
+	{
+		{3, 3, 1},
+		{64, 8, 8},
+		{128, 16, 8},
+		{256, 16, 16},
+		{512, 32, 16},
+		{1000, 40, 25},
+	};
+	auto it=std::find_if(factorizations, factorizations+SIZEOF(factorizations), [&](SizeFactorization const &f)
+	{
+		return f.size==size;
+	});
+	return *it;
+}
+void			save_all_weights_png(std::vector<vec> &weights)
+{
+	if(weights.size()!=nlayers)
+		return;
+	for(int kl=0;kl<nlayers;++kl)
+	{
+		auto &wk=weights[kl];
+		if(wk.size())
+		{
+			auto &layer=resnet18[kl];
+			auto &info=winfo[layer.info[0]];
+			if(layer.type==L_CONV||layer.type==L_RES_SAVE_DS)
+			{
+				int Cout=info.nfilt, Cin=info.nchan, W=info.w, H=info.h;
+				auto outdim=factorize_size(Cout), indim=factorize_size(Cin);
+				int kernelsize=W*H, filtsize=Cin*kernelsize, weightsize=Cout*filtsize;
+				auto fimage=new unsigned char[weightsize], bimage=new unsigned char[Cout];
+				int fimw=outdim.w*indim.w*W, fimh=outdim.h*indim.h*H;
+
+				float fmin=wk[0], fmax=wk[0], bmin=wk[filtsize], bmax=wk[filtsize];
+				for(int kco=0;kco<Cout;++kco)
+				{
+					auto filt=wk.data()+(filtsize+1)*kco;
+					for(int k=0;k<filtsize;++k)
+					{
+						if(fmin>filt[k])
+							fmin=filt[k];
+						if(fmax<filt[k])
+							fmax=filt[k];
+					}
+					if(bmin>filt[filtsize])
+						bmin=filt[filtsize];
+					if(bmax<filt[filtsize])
+						bmax=filt[filtsize];
+				}
+				float fgain=fmin<fmax?255/(fmax-fmin):0;
+				float bgain=bmin<bmax?255/(bmax-bmin):0;
+
+				for(int kcoy=0;kcoy<outdim.h;++kcoy)
+				{
+					for(int kcox=0;kcox<outdim.w;++kcox)
+					{
+						int kco=outdim.w*kcoy+kcox;
+						auto filt=wk.data()+(filtsize+1)*kco;
+						for(int kciy=0;kciy<indim.h;++kciy)
+						{
+							for(int kcix=0;kcix<indim.w;++kcix)
+							{
+								int kci=indim.w*kciy+kcix;
+								auto kernel=filt+kernelsize*kci;
+								auto dst=fimage + fimw*( H*(indim.h*kcoy+kciy) ) + W*(indim.w*kcox+kcix);
+								for(int ky=0;ky<H;++ky)
+									for(int kx=0;kx<W;++kx)
+										dst[fimw*ky+kx]=(unsigned char)(fgain*(kernel[W*ky+kx]-fmin));
+							}
+						}
+						bimage[kco]=(unsigned char)(bgain*(filt[filtsize]-bmin));
+					}
+				}
+				std::string fname=layer.filename, bname=layer.filename;
+				fname+="_filt.PNG";
+				bname+="_bias.PNG";
+				save_image_monochrome(fname.c_str(), fimage, fimw, fimh);
+				save_image_monochrome(bname.c_str(), bimage, outdim.w, outdim.h);
+				delete[] fimage;
+				delete[] bimage;
+			}
+			else if(layer.type==L_LINEAR)
+			{
+			}
 		}
 	}
 }
@@ -623,6 +761,19 @@ void			print_GPU_usage()
 	}
 	printf("Using %.2lf %s of GPU memory\n", units, a);
 }
+void			print_mean_var(CLBuffer buf, int nc, int w, int h)
+{
+	auto csize=w*h, size=nc*csize;
+	auto data=buf.read_sub(0, size);
+	printf("Mean\tStd.dev\n");
+	for(int kc=0;kc<nc;++kc)
+	{
+		float mean=0, stddev=0;
+		calc_mean_var(data+csize*kc, csize, mean, stddev);
+		printf("%f\t%f\n", mean, stddev);
+	}
+	prompt("Continue?");
+}
 void			print_GPU_buffer(CLBuffer buf, int nc, int w, int h)
 {
 	auto size=nc*w*h;
@@ -667,7 +818,8 @@ void			save_GPU_buffer(CLBuffer clbuf, int nch, int w, int h, const char *layer_
 		}while(cw*ch!=nch);
 	}
 	//printf("x = floor_log2(%d) = %d\nch>>1 = %d\ncw = %d, cw=%d, ch=%d\n", nch, floor_log2(nch), floor_log2(nch)>>1, floor_log2(nch)-(floor_log2(nch)>>1), cw, ch);//
-	printf("Saving %dx%d data (%d channels)...\n", cw*w, ch*h, nch);
+	printf("\tSaving %dx%dx%d...\n", nch, w, h);
+	//printf("Saving %dx%d data (%d channels)...\n", cw*w, ch*h, nch);
 	int size=nch*w*h;
 	auto data=clbuf.read_sub(0, size);
 	auto buffer=new unsigned char[size];
@@ -741,10 +893,57 @@ struct			ResultCandidate
 	int idx;
 	float match;
 };
+
+void			conv_test()
+{
+	float srcfilt[]=
+	{
+		1, 2, 3,
+		4, 5, 6,
+		7, 8, 9,
+		10,
+	};
+	const int bw=4, bh=4,
+		filtsize=3*3,
+		datasize=bw*bh;
+	float srcdata[]=
+	{
+		1, 2, 3, 4,
+		5, 6, 7, 8,
+		9, 10, 11, 12,
+		13, 14, 15, 16,
+	};
+	int srcindices[]=
+	{
+		1, 4, 4,//in dim
+		1, 4, 4,//out dim
+		0,		//logstride
+		3, 3,	//kernel size
+	};
+
+	ocl_init("cl_kernels.h");
+	CLBuffer cfilt, cdata[2], cindices;
+	cfilt.create(filtsize+1, BUFFER_READ_WRITE, srcfilt);
+	cdata[0].create(datasize, BUFFER_READ_WRITE, srcdata);
+	cdata[1].create(datasize, BUFFER_READ_WRITE);
+	cindices.create(II_bufsize, BUFFER_READ_WRITE, srcindices);
+
+	CLBuffer argbuf[]={cdata[0], cdata[1], cindices, cfilt};
+	ocl_sync();
+	kernels[OCL_conv_zp].call(datasize, argbuf, 4);
+
+	auto result=cdata[1].read();
+	print_data(result, bw, bh, 0, bw, 0, bh, "Conv result:");
+
+	exit_success();
+}
 int				main(int argc, char **argv)
 {
 	set_console_buffer_size(120, 2000);
 	printf("ML Sandbox\n\n");
+
+	//conv_test();//
+
 	const char kernels_srcname[]="cl_kernels.h";
 	int success=file_is_readable(kernels_srcname)==1;
 	MY_ASSERT(success, "\'%s\' not found\n", kernels_srcname);
@@ -805,6 +1004,10 @@ int				main(int argc, char **argv)
 	std::vector<vec> weights;
 	auto nparams=load_all_weights_bin(wpath, weights);
 	printf("%d params\n", (int)nparams);
+	//{
+	//	save_all_weights_png(weights);//
+	//	exit_success();//
+	//}
 #endif
 
 	int maxidx=0;
@@ -812,11 +1015,6 @@ int				main(int argc, char **argv)
 	datadim[0].set(3, 224, 224);
 	calc_datadim(resnet18, nlayers, datadim.data(), maxidx);
 	int maxtotal=datadim[maxidx].total;
-	//int maxidx=0;
-	//vecd datadim(convlayers+1);
-	//datadim[0].set(3, 3, 224, 224);
-	//calc_datadim(resnet18_summary, convlayers, datadim.data(), maxidx);
-	//int maxtotal=datadim[maxidx].total;
 
 
 	int *buffer=nullptr, iw=0, ih=0;
@@ -828,7 +1026,7 @@ int				main(int argc, char **argv)
 	float stdev[]={0.229f, 0.224f, 0.225f};
 	float mean[]={0.485f, 0.456f, 0.406f};
 	scale_nearest(buffer, iw, ih, src, tw, th, mean, stdev);
-	//make_input(buffer, iw, ih, 48, 159, tw, th, src);
+	//make_input(buffer, iw, ih, 48, 159, tw, th, src);//kodim23.png
 	PRINT_CORNER(src, tw, th);
 	
 	
@@ -866,11 +1064,9 @@ int				main(int argc, char **argv)
 	for(int kl=0;kl<nlayers;++kl)
 	{
 		auto &layer=resnet18[kl];
-		//if(kl==37)//
-		//	debug_flag=true;//
 		printf("\r%3d / %3d %s...", kl+1, nlayers, layer.to_string().c_str());
 		//printf("args: %p, %p, %p, %p\n", argbuf[0], argbuf[1], argbuf[2], argbuf[3]);//
-		auto &inshape=datadim[kl], &outshape=datadim[kl+1];
+		auto &inshape=datadim[kl], &outshape=datadim[kl+1+(layer.type==L_RES_SAVE_DS)];
 		auto &info=winfo[layer.info[0]];
 		argbuf[3]=cweights[kl];//weights
 		//print_GPU_buffer(ct1, inshape.nch, inshape.w, inshape.h);//
@@ -879,13 +1075,23 @@ int				main(int argc, char **argv)
 		switch(layer.type)
 		{
 		case L_RES_SAVE_DS:
-			argbuf[0]=ct1;//src
-			argbuf[1]=ct3;//dst
-			set_idxbuf(ci, indices, inshape, outshape, 0, 0, floor_log2(info.stride));
-			ocl_sync();
-			kernels[OCL_conv11].call(outshape.nch*(outshape.w>>1)*(outshape.h>>1), argbuf, 4);//downsample dimensions
-			argbuf[0]=ct1;//src
-			argbuf[1]=ct2;//dst
+			{
+				argbuf[0]=ct1;//src
+				argbuf[1]=ct3;//dst
+				//auto shape=outshape;
+				//shape.w>>=1;
+				//shape.h>>=1;
+				//shape.nch<<=1;
+				//shape.calc_total();//downsample dimensions
+				set_idxbuf(ci, indices, inshape, outshape, 0, 0, floor_log2(info.stride));
+
+				//print_idxbuf(indices);//
+
+				ocl_sync();
+				kernels[OCL_conv11].call(outshape.total, argbuf, 4);
+				argbuf[0]=ct1;//src
+				argbuf[1]=ct2;//dst
+			}
 			break;
 		case L_RES_SAVE:
 			ct3.copy_from(ct1);
@@ -954,11 +1160,15 @@ int				main(int argc, char **argv)
 			break;
 		}
 #if 0
+		//print_mean_var(ct1, outshape.nch, outshape.w, outshape.h);
 		print_GPU_buffer(ct1, outshape.nch, outshape.w, outshape.h);//
 #endif
-		if(save_internals)//save the output of each relu
 	//	if(save_internals&&layer.type==L_RELU)//save the output of each relu
-			save_GPU_buffer(layer.type==L_RES_SAVE?ct3:ct1, outshape.nch, outshape.w, outshape.h, layer.to_string().c_str());
+		if(save_internals)
+		{
+			CLBuffer buf=layer.type==L_RES_SAVE_DS||layer.type==L_RES_SAVE?ct3:ct1;
+			save_GPU_buffer(buf, outshape.nch, outshape.w, outshape.h, layer.to_string().c_str());
+		}
 	}
 	auto t2=time_sec();
 	printf("\nResNet evaluation elapsed: %lf ms\n", 1000*(t2-t1));

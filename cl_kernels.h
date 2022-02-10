@@ -112,9 +112,8 @@ __kernel void conv11		(__global float *src, __global float *dst, __constant int 
 	int xout=idx%wout, yout=idx/wout%hout, kcout=idx/(wout*hout);
 	int xin=xout<<indices[II_logstride], yin=yout<<indices[II_logstride], kcin;
 
-	__global float *filt=weights+(nchin+1)*kcout;
+	__global float *px=src+win*yin+xin, *filt=weights+(nchin+1)*kcout;
 	float result=filt[nchin];//bias
-	__global float *px=src+win*yin+xin;
 
 	for(kcin=0;kcin<indices[II_Cin];++kcin, px+=chsize)
 		result+=filt[kcin]*px[0];
@@ -127,21 +126,40 @@ __kernel void conv_zp		(__global float *src, __global float *dst, __constant int
 	int nchin=indices[II_Cin],
 		win=indices[II_Win], hin=indices[II_Hin], chsize=win*hin,
 		wout=indices[II_Wout], hout=indices[II_Hout],
-		wk=indices[II_Wk], hk=indices[II_Hk];
+		wk=indices[II_Wk], hk=indices[II_Hk], convsize=nchin*wk*hk;
 	int xout=idx%wout, yout=idx/wout%hout, kcout=idx/(wout*hout);
 	int xin=xout<<indices[II_logstride], yin=yout<<indices[II_logstride], kcin;
 	int xsstart, xsend, ysstart, ysend;
 	int xfstart, xfend, yfstart, yfend;
 
-	int convsize=nchin*wk*hk;
-	__global float *filt=weights+(convsize+1)*kcout;
+	__global float *px=src, *filt=weights+(convsize+1)*kcout;
 	float result=filt[convsize];//bias
-	__global float *px=src;
+
+	//if(indices[II_Wk]==7&&xout==0&&yout==0)
+	//if(indices[II_Wk]==7&&kcout==indices[II_Cout]-1&&xout==0&&yout==0)
+//	if(indices[II_Wk]==7&&kcout==0&&xout==0&&yout==0)
+//	{
+//		for(int k=0;k<convsize+1;k+=7)
+//			printf("%9f %9f %9f %9f %9f %9f %9f ", filt[k], filt[k+1], filt[k+2], filt[k+3], filt[k+4], filt[k+5], filt[k+6]);
+//			//printf("%d %d %9f %9f %9f %9f %9f %9f %9f ", kcout, k, filt[k], filt[k+1], filt[k+2], filt[k+3], filt[k+4], filt[k+5], filt[k+6]);
+//	}
 
 	xsstart	=xin-(wk>>1);	if(xsstart<0)xfstart=-xsstart, xsstart=0;		else xfstart=0;
-	xsend	=xin+(wk>>1);	if(xsend>win)xfend=wk-(xsend-win), xsend=win;	else xfend=wk;
+	xsend	=xin+(wk>>1)+1;	if(xsend>win)xfend=wk-(xsend-win), xsend=win;	else xfend=wk;
 	ysstart	=yin-(hk>>1);	if(ysstart<0)yfstart=-ysstart, ysstart=0;		else yfstart=0;
-	ysend	=yin+(hk>>1);	if(ysend>hin)yfend=hk-(ysend-hin), ysend=hin;	else yfend=hk;
+	ysend	=yin+(hk>>1)+1;	if(ysend>hin)yfend=hk-(ysend-hin), ysend=hin;	else yfend=hk;
+	//if(idx==0)
+	//{
+	//	printf("(%d,%d) f: %d~%d, %d~%d, s: %d~%d, %d~%d", xout, yout, xfstart, xfend, yfstart, yfend, xsstart, xsend, ysstart, ysend);
+	//	//for(int ky=yfstart;ky<yfend;++ky)
+	//	//	for(int kx=xfstart;kx<xfend;++kx)
+	//	//		printf("(%d, %d) %f ", kx, ky, filt[wk*ky+kx]);
+	//	//printf("bias = %f ", result);
+	//	
+	//	for(int ky=ysstart;ky<ysend;++ky)
+	//		for(int kx=xsstart;kx<xsend;++kx)
+	//			printf("(%d, %d) %f ", kx, ky, px[win*ky+kx]);
+	//}
 	//if(idx==0)//
 	//{
 	//	printf("\n%d~%d, %d~%d\n", xsstart, xsend, ysstart, ysend);

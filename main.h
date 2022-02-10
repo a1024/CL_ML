@@ -10,7 +10,7 @@ int				file_is_readable(const char *filename);//0: not readable, 1: regular file
 bool			open_text(const char *filename, std::string &data);
 void			load_image(const char *filename, int *&buffer, int &iw, int &ih);
 void			save_image(const char *filename, const int *buffer, int iw, int ih);
-void			save_image_monochrome(const char *filename, const unsigned char *buffer, int iw, int ih, bool prompt);
+void			save_image_monochrome(const char *filename, const unsigned char *buffer, int iw, int ih, bool prompt=false);
 const char*		gen_filename(double compression_ratio=0);
 void			path_adjust(std::string &path);
 void			get_path(std::string &path, const char *format, ...);
