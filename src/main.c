@@ -38,7 +38,7 @@ int acme_strftime(char *buf, size_t size, double seconds)
 	seconds-=hours*3600;
 	minutes=(int)floor(seconds/60);
 	seconds-=minutes*60;
-	return sprintf_s(buf, size, "%02:%02:%09.6lf", hours, minutes, seconds);
+	return sprintf_s(buf, size, "%02d:%02d:%09.6lf", hours, minutes, seconds);
 }
 int acme_stricmp(const char *a, const char *b)
 {
@@ -1530,10 +1530,10 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 					for(int ky=0;ky<input->shape[2];++ky)
 					{
 						double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
-						int ky2=ky*iw/input->shape[2];
+						int ky2=ky*(ih-1)/(input->shape[2]-1);
 						for(int kx=0;kx<input->shape[3];++kx)
 						{
-							int kx2=kx*iw/input->shape[3];
+							int kx2=kx*(iw-1)/(input->shape[3]-1);
 							dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
 						}
 					}
@@ -1690,7 +1690,7 @@ int main(int argc, char **argv)
 						dst->data[k]=s1->data[k]-s2->data[k];
 						loss+=dst->data[k]*dst->data[k];
 					}
-					loss/=s1->shape[2]*s1->shape[3]<<1;
+					loss/=count<<1;
 				}
 				break;
 			case OP_MS_SSIM:
@@ -1788,11 +1788,11 @@ int main(int argc, char **argv)
 			}
 		}
 
-		loss=sqrt(loss);
+		loss=255*sqrt(loss);
 		av_loss+=loss;
 		++nbatches;
 
-		printf("\r%d/%d = %5.2lf%% RMSE %16.12lf\t\t", ki+1, (int)filenames->count, 100.*(ki+1)/filenames->count, loss);
+		printf("%d/%d = %5.2lf%% RMSE %16.12lf\t\t\r", ki+1, (int)filenames->count, 100.*(ki+1)/filenames->count, loss);
 	}
 
 	save_model(&model, 0);
