@@ -16,6 +16,7 @@
 #include"stb_image.h"
 static const char file[]=__FILE__;
 
+//	#define DEBUG_SAVER
 //	#define DEBUG_AUTOGRAD
 
 #ifdef _MSC_VER
@@ -907,10 +908,11 @@ void init_model(ModelHandle model)
 		if(buf->type==BUF_PARAM)
 		{
 			size_t bufsize=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
-			for(size_t k0=0;k0<bufsize;++k0)
+			double g2=gain*sqrt(6./(buf->shape[0]+buf->shape[1]));
+			for(size_t k0=0;k0<bufsize;++k0, ++kp)
 			{
 				double *val=(double*)array_at(&model->params, kp);
-				*val=(rand()-(RAND_MAX>>1))*gain;//[-0.5, 0.5]
+				*val=(rand()-(RAND_MAX>>1))*g2;//[-0.5, 0.5]
 			}
 		}
 	}
@@ -990,7 +992,7 @@ void parse_model(const char *filename, ModelHandle model)
 		break;
 	}
 
-	STR_COPY(model->src, text->data+*ctx, *ctx);
+	STR_COPY(model->src, text->data, *ctx);
 
 	//allocate buffers
 	size_t nParams=0, nGrad=0;
@@ -1103,10 +1105,11 @@ int print_hex(char *buf, size_t len, double x)
 			x*=16;
 			int digit=(int)floor(x);
 			x-=digit;
-			buf[idx]=digit+(digit<10?'0':'A');
+			buf[idx]=digit+(digit<10?'0':'A'-10);
 			++idx;
 		}
 	}
+	buf[idx]='\0';
 	return idx;
 }
 void save_model(ModelHandle model, int incremental, double loss)
@@ -1130,6 +1133,9 @@ void save_model(ModelHandle model, int incremental, double loss)
 		STR_COPY(filename, g_buf, printed);
 	}
 	STR_COPY(text, model->src->data, model->src->count);
+	STR_APPEND(text, "\n\n", 2, 1);
+	STR_APPEND(text, kw_weights, sizeof(kw_weights)-1, 1);
+	STR_APPEND(text, "\n", 1, 1);
 
 	size_t kp=0;
 	for(int kb=0;kb<(int)model->buffers->count;++kb)
@@ -1576,6 +1582,10 @@ int main(int argc, char **argv)
 	parse_model(argc==5?"model.txt":argv[5], &model);
 
 	ASSERT_MSG(model.input_shape[1]==3, "Only 3 input channels are currently supported");
+
+#ifdef DEBUG_SAVER
+	save_model(&model, 1, 0);//
+#endif
 
 	//read dataset directory
 	ArrayHandle dspath=filter_path(argv[1]);
