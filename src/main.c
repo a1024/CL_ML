@@ -1109,7 +1109,7 @@ int print_hex(char *buf, size_t len, double x)
 	}
 	return idx;
 }
-void save_model(ModelHandle model, int incremental)
+void save_model(ModelHandle model, int incremental, double loss)
 {
 	const char defaultname[]="model.txt";
 	ArrayHandle filename, text;
@@ -1126,7 +1126,7 @@ void save_model(ModelHandle model, int incremental)
 #else
 		struct tm *ts=localtime(&t_now);
 #endif
-		printed=sprintf_s(g_buf, G_BUF_SIZE, "model-%04d%02d%02d-%02d%02d%02d%s.txt", 1900+ts->tm_year, 1+ts->tm_mon, ts->tm_mday, ts->tm_hour%12, ts->tm_min, ts->tm_sec, ts->tm_hour<12?"AM":"PM");
+		printed=sprintf_s(g_buf, G_BUF_SIZE, "model-%04d%02d%02d-%02d%02d%02d-rmse%lf.txt", 1900+ts->tm_year, 1+ts->tm_mon, ts->tm_mday, ts->tm_hour, ts->tm_min, ts->tm_sec, loss);
 		STR_COPY(filename, g_buf, printed);
 	}
 	STR_COPY(text, model->src->data, model->src->count);
@@ -1551,6 +1551,7 @@ Model model={0};
 int main(int argc, char **argv)
 {
 	set_console_buffer_size(120, 2000);
+	//system("cd");//
 	
 	//automatic differentiation in 2D
 #if 1
@@ -1601,10 +1602,12 @@ int main(int argc, char **argv)
 			double psnr=20*log10(255/av_loss);
 			acme_strftime(g_buf, G_BUF_SIZE, (timestamp2-timestamp1)/1000);
 			printf("\t\t\t\t\rEpoch %3d RMSE %16.12lf PSNR %13.9lf %10lf minutes %s\n", ke, av_loss, psnr, (timestamp2-timestamp1)/60000, g_buf);
-			av_loss=0, nbatches=0;
+			
+			save_model(&model, 1, av_loss);
+
 			if(ke>=epoch)
 				break;
-			timestamp1=time_ms();
+			av_loss=0, nbatches=0;
 		}
 
 		//forward
@@ -1810,7 +1813,7 @@ int main(int argc, char **argv)
 		printf("%d/%d = %5.2lf%% RMSE %16.12lf\t\t\r", ki+1, (int)filenames->count, 100.*(ki+1)/filenames->count, loss);
 	}
 
-	save_model(&model, 0);
+	save_model(&model, 0, av_loss);
 	free_model(&model);
 #endif
 
