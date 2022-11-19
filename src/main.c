@@ -1582,7 +1582,9 @@ int main(int argc, char **argv)
 	ASSERT_MSG(filenames->count, "No images in dataset path \'%s\'", argv[1]);
 
 	//train
-	double av_loss=0, loss=_HUGE;
+	double av_loss=0, loss=_HUGE,
+		beta1=0.94, beta2=0.9878, epsilon=1e-8,//adam optimizer
+		beta1_t=1, beta2_t=1;
 	int nbatches=0;
 	int ki=0,//points at current image to load
 		kblock=0;//points at current image block in case of block augmentation
@@ -1786,6 +1788,19 @@ int main(int argc, char **argv)
 				LOG_ERROR("Unrecognized instruction %d.", inst->op);
 				break;
 			}
+		}
+		
+		mix_inplace((double*)model.adam_m->data, (double*)model.grad->data, beta1, model.grad->count);
+		sq_inplace((double*)model.grad->data, model.grad->count);
+		mix_inplace((double*)model.adam_v->data, (double*)model.grad->data, beta2, model.grad->count);
+
+		beta1_t*=beta1;
+		beta2_t*=beta2;
+		double gain1=1/(1-beta1_t), gain2=1/(1-beta2_t);
+		for(int k=0;k<model.grad->count;++k)//https://optimization.cbe.cornell.edu/index.php?title=Adam
+		{
+			double mhat=((double*)model.adam_m->data)[k]*gain1, vhat=((double*)model.adam_v->data)[k]*gain2;
+			((double*)model.params->data)[k]-=lr*mhat/(sqrt(vhat)+epsilon);
 		}
 
 		loss=255*sqrt(loss);
