@@ -16,6 +16,8 @@
 #include"stb_image.h"
 static const char file[]=__FILE__;
 
+//	#define DEBUG_AUTOGRAD
+
 #ifdef _MSC_VER
 int set_console_buffer_size(short w, short h)
 {
@@ -29,6 +31,123 @@ int set_console_buffer_size(short w, short h)
 #else
 #define set_console_buffer_size(...)
 #endif
+
+int acme_strftime(char *buf, size_t size, double seconds)
+{
+	int hours=(int)floor(seconds/3600), minutes;
+	seconds-=hours*3600;
+	minutes=(int)floor(seconds/60);
+	seconds-=minutes*60;
+	return sprintf_s(buf, size, "%02:%02:%09.6lf", hours, minutes, seconds);
+}
+int acme_stricmp(const char *a, const char *b)
+{
+	if(!a||!b)
+		return !a&&!b;
+	while(*a&&tolower(*a)==tolower(*b))
+		++a, ++b;
+	return (*a>*b)-(*a<*b);
+}
+ptrdiff_t acme_strrchr(const char *str, ptrdiff_t len, char c)
+{
+	ptrdiff_t k;
+
+	for(k=len-1;k>=0;--k)
+		if(str[k]==c)
+			return k;
+	return -1;
+}
+const char* get_extension(const char *filename, ptrdiff_t len)
+{
+	ptrdiff_t idx;
+
+	idx=acme_strrchr(filename, len, '.');
+	if(idx==-1)
+		return 0;
+	return filename+idx+1;
+#if 0
+	const char *dot=strrchr(filename, '.');//https://stackoverflow.com/questions/5309471/getting-file-extension-in-c
+	if(!dot||dot==filename)
+		return "";
+	return dot+1;
+#endif
+}
+ArrayHandle filter_path(const char *path)
+{
+	ArrayHandle path2;
+	char c;
+
+	STR_COPY(path2, path, strlen(path));
+	for(ptrdiff_t k=0;k<(ptrdiff_t)path2->count;++k)
+	{
+		if(path2->data[k]=='\\')
+			path2->data[k]='/';
+	}
+	if(path2->data[path2->count-1]!='/')
+	{
+		c='/';
+		STR_APPEND(path2, &c, 1, 1);
+	}
+	return path2;
+}
+void	free_str(void *p)
+{
+	ArrayHandle *str;
+	
+	str=(ArrayHandle*)p;
+	array_free(str);
+}
+ArrayHandle get_filenames(const char *path, const char **extensions, int extCount)
+{
+	ArrayHandle searchpath, filename, filenames;
+	char c;
+	WIN32_FIND_DATAA data={0};
+	void *hSearch;
+	int success;
+	const char *extension;
+	ptrdiff_t len;
+	int found;
+	
+	//prepare searchpath
+	searchpath=filter_path(path);
+	c='*';
+	STR_APPEND(searchpath, &c, 1, 1);
+
+	hSearch=FindFirstFileA(searchpath->data, &data);//skip .
+	if(hSearch==INVALID_HANDLE_VALUE)
+		return 0;
+	success=FindNextFileA(hSearch, &data);//skip ..
+
+	STR_POPBACK(searchpath, 1);//pop the '*'
+	ARRAY_ALLOC(ArrayHandle, filenames, 0, 0, 0, free_str);
+
+	for(;success=FindNextFileA(hSearch, &data);)
+	{
+		len=strlen(data.cFileName);
+		extension=get_extension(data.cFileName, len);
+		if(!(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY))
+		{
+			found=0;
+			for(int k=0;k<extCount;++k)
+			{
+				if(!acme_stricmp(extension, extensions[k]))
+				{
+					found=1;
+					break;
+				}
+			}
+			if(found)
+			{
+				STR_COPY(filename, searchpath->data, searchpath->count);
+				STR_APPEND(filename, data.cFileName, strlen(data.cFileName), 1);
+				ARRAY_APPEND(filenames, &filename, 1, 1, 0);
+			}
+		}
+	}
+	success=FindClose(hSearch);
+	array_free(&searchpath);
+	return filenames;
+}
 
 #if 0
 unsigned nplatforms=0, ndevices=0;
@@ -211,7 +330,7 @@ typedef enum AugmentationTypeEnum
 typedef enum InstTypeEnum
 {
 	//FWD: x[C,H,W], filt[Co,Ci,K,K], bias[Co] -> net[C,H,W]
-	//BWD: dL_dnet[C,H,W], filt[Co,Ci,K,K] -> dL_dx[C,H,W], dL_dfilt[Co,Ci,K,K], dL_dbias[Co]
+	//BWD: dL_dnet[C,H,W], filt[Co,Ci,K,K], x[C,H,W] -> dL_dx[C,H,W], dL_dfilt[Co,Ci,K,K], dL_dbias[Co]
 	OP_CC2,
 	OP_CONV2,
 
@@ -242,7 +361,7 @@ typedef enum InstTypeEnum
 typedef struct InstructionStruct
 {
 	InstType op;
-	int fwd_args[3], fwd_result, bwd_args[2], bwd_results[3],//indices
+	int fwd_args[3], fwd_result, bwd_args[3], bwd_results[3],//indices
 		info[4];//[xpad, ypad, xstride, ystride], or [quantization_nlevels]
 } Instruction;
 typedef enum BufferTypeEnum
@@ -255,7 +374,10 @@ typedef enum BufferTypeEnum
 } BufferType;
 typedef struct BufferStruct
 {
-	int shape[4];//[B, C, H, W], or [Cout, Cin, Ky, Kx]
+	//[B, C, H, W]				for data & its gradient
+	//[Cout, Cin, Ky, Kx]		for conv filter & its gradient (in-place added-up over B)
+	//[Cout, 1, 1, 1]			for conv bias & its gradient (in-place added-up over B)
+	int shape[4];
 	BufferType type;
 	union
 	{
@@ -272,7 +394,7 @@ typedef struct ModelStruct
 	AugmentationType aug;
 	int input_shape[4],//[B,C,W,H]
 		is_test,
-		result;//index in buffers
+		input;//index in buffers
 	ArrayHandle
 		src,	//a string, the source code
 		instructions,//array of Instruction
@@ -562,7 +684,7 @@ void parse_conv(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 	if(first_inst)
 	{
 		x->shape[0]=model->input_shape[0];//B
-		x->shape[1]=Cin;
+		x->shape[1]=model->input_shape[1]=Cin;
 		x->shape[2]=model->input_shape[2];
 		x->shape[3]=model->input_shape[3];
 		x->type=BUF_NORMAL;
@@ -608,11 +730,12 @@ void parse_conv(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 	inst->fwd_result=nbuffers+4;	//net
 	inst->bwd_args[0]=nbuffers+5;	//dL_dnet
 	inst->bwd_args[1]=nbuffers;		//filt
+	inst->bwd_args[2]=x_idx;
 	inst->bwd_results[0]=dLdx_idx;	//dL_dx
 	inst->bwd_results[1]=nbuffers+1;//dL_dfilt
 	inst->bwd_results[2]=nbuffers+3;//dL_dbias
-	inst->info[0]=inst->info[1]=pad;
-	inst->info[2]=inst->info[3]=stride;
+	inst->info[0]=inst->info[1]=pad;	//[x,y]pad
+	inst->info[2]=inst->info[3]=stride;	//[x,y]stride
 
 	//nonlinearity
 	inst[1].fwd_args[0]=nbuffers+4;		//net
@@ -621,7 +744,7 @@ void parse_conv(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 	inst[1].bwd_args[1]=nbuffers+6;		//x2
 	inst[1].bwd_results[0]=nbuffers+5;	//dL_dnet
 }
-void parse_save(const char *filename, ArrayHandle text, int *ctx, ModelHandle model, ArrayHandle variables)
+void parse_save(const char *filename, ArrayHandle text, int *ctx, ModelHandle model, ArrayHandle *variables)
 {
 	Variable *var;
 	int start;
@@ -630,9 +753,9 @@ void parse_save(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 	start=*ctx;
 	get_id(text, ctx);
 	int found=0;
-	for(int k=0;k<(int)variables->count;++k)
+	for(int k=0;k<(int)variables[0]->count;++k)
 	{
-		var=(Variable*)array_at(&variables, k);
+		var=(Variable*)array_at(variables, k);
 		if(var->name->count==*ctx-start&&!memcmp(text->data+start, var->name->data, var->name->count))
 		{
 			found=1;
@@ -640,7 +763,7 @@ void parse_save(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 		}
 	}
 	ASSERT_MSG(!found, "%s(%d): Saved variable can only appear once, \'%.*s\' appeared before", filename, ctx[1], *ctx-start, text->data+start);
-	var=(Variable*)ARRAY_APPEND(variables, 0, 1, 1, 0);
+	var=(Variable*)ARRAY_APPEND(*variables, 0, 1, 1, 0);
 	STR_COPY(var->name, text->data+start, *ctx-start);
 	if(model->instructions->count)
 	{
@@ -659,6 +782,7 @@ void parse_quantize(const char *filename, ArrayHandle text, int *ctx, ModelHandl
 	ASSERT_MSG(model->instructions->count, "%s(%d): Quantizer cannot be the first operation", filename, *ctx);//because Cin would be unknown
 	int first_inst=!model->instructions->count;
 	inst=(Instruction*)ARRAY_APPEND(model->instructions, 0, 1, 1, 0);
+	inst->op=OP_QUANTIZER;
 
 	skip_ws(text, ctx);
 	parse_number(filename, text, ctx, 10, &fval);
@@ -786,7 +910,7 @@ void init_model(ModelHandle model)
 			for(size_t k0=0;k0<bufsize;++k0)
 			{
 				double *val=(double*)array_at(&model->params, kp);
-				*val=rand()*gain;
+				*val=(rand()-(RAND_MAX>>1))*gain;//[-0.5, 0.5]
 			}
 		}
 	}
@@ -834,6 +958,8 @@ void parse_model(const char *filename, ModelHandle model)
 	else
 		model->input_shape[3]=model->input_shape[2];
 
+	ASSERT_MSG(model->input_shape[0]&&model->input_shape[2]&&model->input_shape[3], "Invalid input shape [%d, %d, %d, %d]", model->input_shape[0], model->input_shape[1], model->input_shape[2], model->input_shape[3]);
+
 	ARRAY_ALLOC(Instruction, model->instructions, 0, 0, 0, 0);
 	ARRAY_ALLOC(Buffer, model->buffers, 0, 0, 0, free_buffer);
 
@@ -852,7 +978,7 @@ void parse_model(const char *filename, ModelHandle model)
 			parse_conv(filename, text, ctx, model, variables, match);
 			continue;
 		case 2://save variable		not an instruction
-			parse_save(filename, text, ctx, model, variables);
+			parse_save(filename, text, ctx, model, &variables);
 			continue;
 		case 3://quantize
 			parse_quantize(filename, text, ctx, model, variables);
@@ -912,9 +1038,15 @@ void parse_model(const char *filename, ModelHandle model)
 
 	skip_ws(text, ctx);
 	ASSERT_MSG(*ctx==text->count, "%s(%d): Expected end of file", filename, ctx[1]);
+	ASSERT_MSG(model->instructions&&model->instructions->count, "Model has no instructions");
 
 	array_free(&variables);
 	array_free(&text);
+
+	{
+		Instruction *inst=(Instruction*)array_at(&model->instructions, 0);
+		model->input=inst->fwd_args[0];
+	}
 }
 
 int print_hex(char *buf, size_t len, double x)
@@ -1040,16 +1172,8 @@ void save_model(ModelHandle model, int incremental)
 	array_free(&filename);
 }
 
-void addsh2d(double *tensor)
+void crosscorrelation2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *bufb, Buffer *buf2, int enable_bias)
 {
-}
-void cc2d_fwd(Model *model, Instruction *inst)
-{
-	Buffer
-		*bufx=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
-		*buff=(Buffer*)array_at(&model->buffers, inst->fwd_args[1]),
-		*bufb=(Buffer*)array_at(&model->buffers, inst->fwd_args[2]),
-		*buf2=(Buffer*)array_at(&model->buffers, inst->fwd_result);
 #define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->params, BUFFER->offset):(double*)array_at(&model->grad, BUFFER->offset))
 	double *data, *filt, *bias, *d2;
 	FETCH(data, bufx);
@@ -1058,35 +1182,42 @@ void cc2d_fwd(Model *model, Instruction *inst)
 	FETCH(d2, buf2);
 #undef	FETCH
 
+	ASSERT_MSG(bufx->shape[0]==buf2->shape[0], "CC2D: Different batch size %d != %d", bufx->shape[0], buf2->shape[0]);
+	ASSERT_MSG(bufx->shape[1]==buff->shape[1], "CC2D: Cin mismatch %d != %d", bufx->shape[1], buff->shape[1]);
+	ASSERT_MSG(buf2->shape[1]==buff->shape[0], "CC2D: Cout mismatch, filter [%d %d %d %d], output [%d %d %d %d]",
+		buff->shape[0], buff->shape[1], buff->shape[2], buff->shape[3],
+		buf2->shape[0], buf2->shape[1], buf2->shape[2], buf2->shape[3]);
+	ASSERT_MSG(bufx->shape[2]==buf2->shape[2]&&bufx->shape[3]==buf2->shape[3], "CC2D: Dimension mismatch %dx%d != %dx%d", bufx->shape[2], bufx->shape[3], buf2->shape[2], buf2->shape[3]);
+
 	size_t ires=bufx->shape[2]*bufx->shape[3],
 		isize=bufx->shape[1]*bufx->shape[2]*bufx->shape[3],
 		osize=buf2->shape[1]*buf2->shape[2]*buf2->shape[3],
-		fsize=buf2->shape[1]*buf2->shape[2]*buf2->shape[3];
+		K2=buff->shape[2]*buff->shape[3];
 	int ypad=buff->shape[2]>>1, xpad=buff->shape[3]>>1;
-	for(int kb=0;kb<buf2->shape[0];++kb)//for each batch
+	for(int kb=0;kb<buf2->shape[0];++kb)//for each sample in batch
 	{
 		double *outsample=d2+osize*kb;
-		for(int ko=0;ko<buf2->shape[1];++ko)//for output channel
+		for(int ko=0;ko<buf2->shape[1];++ko)//for each output channel
 		{
 			for(int ky=0;ky<buf2->shape[2];++ky)//for each row
 			{
 				for(int kx=0;kx<buf2->shape[3];++kx, ++outsample)//for each pixel
 				{
-					double *insample=data+isize*kb, *kernel=filt+fsize*ko;
-					double sum=bias[ko];
-					for(int ki=0;ki<buff->shape[1];++ki, insample+=ires)//for each input channel
+					double *inchannel=data+isize*kb;
+					double sum=enable_bias?bias[ko]:0;
+					for(int ki=0;ki<buff->shape[1];++ki, inchannel+=ires)//for each input channel
 					{
+						double *kernel=filt+K2*(buff->shape[1]*ko+ki);
 						for(int ky2=0;ky2<buff->shape[2];++ky2)//for each kernel row
 						{
 							unsigned yidx=ky+ky2-ypad;
 							if((unsigned)yidx<(unsigned)buf2->shape[2])
 							{
-								double *inrow=insample+bufx->shape[3]*yidx;
-								for(int kx2=0;kx2<buff->shape[3];++kx2, ++inrow, ++kernel)//for each kernel value
+								for(int kx2=0;kx2<buff->shape[3];++kx2)//for each kernel value
 								{
 									unsigned xidx=kx+kx2-xpad;
 									if((unsigned)xidx<(unsigned)buf2->shape[3])
-										sum+=*kernel**inrow;
+										sum+=kernel[buff->shape[3]*ky2+kx2]*inchannel[bufx->shape[3]*yidx+xidx];
 								}
 							}
 						}
@@ -1122,6 +1253,66 @@ void cc2d_fwd(Model *model, Instruction *inst)
 		}
 	}//*/
 }
+void dcrosscorrelation_dx_2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *buf2)//filter Cin & Cout are swapped, so filt shape = [Ci,Co,Ky,Kx]
+{
+#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->params, BUFFER->offset):(double*)array_at(&model->grad, BUFFER->offset))
+	double *data, *filt, *d2;
+	FETCH(data, bufx);
+	FETCH(filt, buff);
+	FETCH(d2, buf2);
+#undef	FETCH
+
+	//int temp=buff->shape[0];//X
+	//buff->shape[0]=buff->shape[1];
+	//buff->shape[1]=temp;
+
+	ASSERT_MSG(bufx->shape[0]==buf2->shape[0], "Conv2D: Different batch size %d != %d", bufx->shape[0], buf2->shape[0]);
+	ASSERT_MSG(bufx->shape[1]==buff->shape[0], "Conv2D: Cin mismatch %d != %d", bufx->shape[1], buff->shape[0]);
+	ASSERT_MSG(buf2->shape[1]==buff->shape[1], "Conv2D: Cout mismatch %d != %d", buf2->shape[1], buff->shape[1]);
+	ASSERT_MSG(bufx->shape[2]==buf2->shape[2]&&bufx->shape[3]==buf2->shape[3], "CC2D: Dimension mismatch %dx%d != %dx%d", bufx->shape[2], bufx->shape[3], buf2->shape[2], buf2->shape[3]);
+
+	size_t ires=bufx->shape[2]*bufx->shape[3],
+		isize=bufx->shape[1]*bufx->shape[2]*bufx->shape[3],
+		osize=buf2->shape[1]*buf2->shape[2]*buf2->shape[3],
+		K2=buff->shape[2]*buff->shape[3];
+	int ypad=buff->shape[2]>>1, xpad=buff->shape[3]>>1;
+	for(int kb=0;kb<buf2->shape[0];++kb)//for each sample in batch
+	{
+		double *outsample=d2+osize*kb;
+		for(int ki=0;ki<buff->shape[1];++ki)//for each input channel
+		{
+			for(int ky=0;ky<buf2->shape[2];++ky)//for each row
+			{
+				for(int kx=0;kx<buf2->shape[3];++kx, ++outsample)//for each pixel
+				{
+					double *inchannel=data+isize*kb;
+					double sum=0;
+					for(int ko=0;ko<buff->shape[0];++ko, inchannel+=ires)//for each output channel
+					{
+						double *kernel=filt+K2*(buff->shape[1]*ko+ki);
+						for(int ky2=0;ky2<buff->shape[2];++ky2)//for each kernel row
+						{
+							unsigned yidx=ky+ky2-ypad;
+							if((unsigned)yidx<(unsigned)buf2->shape[2])
+							{
+								for(int kx2=0;kx2<buff->shape[3];++kx2)//for each kernel value
+								{
+									unsigned xidx=kx+kx2-xpad;
+									if((unsigned)xidx<(unsigned)buf2->shape[3])
+										sum+=kernel[buff->shape[3]*(buff->shape[2]-1-ky2)+buff->shape[3]-1-kx2]*inchannel[bufx->shape[3]*yidx+xidx];			//difference between crosscorrelation2d and conv2d
+								}
+							}
+						}
+					}
+					*outsample=sum;
+				}
+			}
+		}
+	}
+	//temp=buff->shape[0];//X
+	//buff->shape[0]=buff->shape[1];
+	//buff->shape[1]=temp;
+}
 void quantizer_train_fwd(Model *model, Instruction *inst)
 {
 	Buffer
@@ -1134,6 +1325,226 @@ void quantizer_train_fwd(Model *model, Instruction *inst)
 	for(size_t k=0;k<size;++k)
 		dst->data[k]=src->data[k]+gain*(rand()-(RAND_MAX>>1));
 }
+//double dotsh2d(const double *fixed, const double *shifted, int Hf, int Wf, int Hs, int Ws, int dy, int dx)
+//{
+//	double sum=0;
+//	for(int ky=0;ky<H;++ky)
+//	{
+//		int ky2=ky+dy;
+//		if((unsigned)ky2<(unsigned)H)
+//		{
+//			for(int kx=0;kx<W;++kx)
+//			{
+//				int kx2=kx+dx;
+//				if((unsigned)kx2<(unsigned)W)
+//					sum+=fixed[W*ky+kx]*shifted[W*ky2+kx2];//integer multiplications can be optimized away
+//			}
+//		}
+//	}
+//	return sum;
+//}
+void dcrosscorrelation_dfilt_2d(Model *model, Buffer *buf_dL_dnet, Buffer *buf_x, Buffer *buf_dL_dfilt, int xpad, int ypad)
+{
+#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->params, BUFFER->offset):(double*)array_at(&model->grad, BUFFER->offset))
+	double *dL_dnet, *x, *dL_dfilt;
+	FETCH(dL_dnet, buf_dL_dnet);
+	FETCH(x, buf_x);
+	FETCH(dL_dfilt, buf_dL_dfilt);
+#undef	FETCH
+	//int ypad=buf_dL_dfilt->shape[2]>>1, xpad=buf_dL_dfilt->shape[3]>>1;
+	size_t
+		netres=buf_dL_dnet->shape[2]*buf_dL_dnet->shape[3], bnetsize=buf_dL_dnet->shape[1]*netres,
+		xres=buf_x->shape[2]*buf_x->shape[3], bxsize=buf_x->shape[1]*xres,
+		ksize=buf_dL_dfilt->shape[2]*buf_dL_dfilt->shape[3];
+	memset(dL_dfilt, 0, buf_dL_dfilt->shape[0]*buf_dL_dfilt->shape[1]*buf_dL_dfilt->shape[2]*buf_dL_dfilt->shape[3]*sizeof(double));//[Co,Ci,K,K]
+	for(int kb=0;kb<buf_x->shape[0];++kb, dL_dnet+=bnetsize, x+=bxsize)//for each sample in batch
+	{
+		double *kernel=dL_dfilt;
+		for(int ko=0;ko<buf_dL_dnet->shape[1];++ko)//for each channel Co in dL_dnet
+		{
+			for(int ki=0;ki<buf_x->shape[1];++ki)//for each channel Ci in x
+			{
+				for(int kky=0;kky<buf_dL_dfilt->shape[2];++kky)//for kernel height
+				{
+					for(int kkx=0;kkx<buf_dL_dfilt->shape[3];++kkx, ++kernel)//for kernel width
+					{
+						double sum=0;
+						for(int ky=0;ky<buf_dL_dnet->shape[2];++ky)
+						{
+							int ky2=ky+kky-ypad;
+							if((unsigned)ky2<(unsigned)buf_x->shape[2])
+							{
+								for(int kx=0;kx<buf_dL_dnet->shape[3];++kx)
+								{
+									int kx2=kx+kkx-xpad;
+									if((unsigned)kx2<(unsigned)buf_x->shape[3])
+										sum+=dL_dnet[netres*ko+buf_dL_dnet->shape[3]*ky+kx]*x[xres*ki+buf_x->shape[3]*ky2+kx2];
+								}
+							}
+						}
+						*kernel=sum;
+					}
+					//	*kernel+=dotsh2d(dL_dnet+netres*ko, x+xres*ki, buf_x->shape[2], buf_x->shape[3], kky-ypad, kkx-xpad);
+				}
+			}
+		}
+	}
+}
+void dcrosscorrelation_dbias_2d(Model *model, Buffer *buf_dL_dnet, Buffer *buf_dL_dbias)
+{
+#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->params, BUFFER->offset):(double*)array_at(&model->grad, BUFFER->offset))
+	double *dL_dnet, *dL_dbias;
+	FETCH(dL_dnet, buf_dL_dnet);
+	FETCH(dL_dbias, buf_dL_dbias);
+#undef	FETCH
+	//the sum is over [B, -, W, H]
+	for(int kc=0;kc<buf_dL_dnet->shape[1];++kc)
+	{
+		dL_dbias[kc]=0;
+		for(int kb=0;kb<buf_dL_dnet->shape[0];++kb)
+		{
+			double *ptr=dL_dnet+buf_dL_dnet->shape[3]*buf_dL_dnet->shape[2]*(buf_dL_dnet->shape[1]*kb+kc);
+			for(int ky=0;ky<buf_dL_dnet->shape[2];++ky)
+			{
+				for(int kx=0;kx<buf_dL_dnet->shape[3];++kx, ++ptr)
+					dL_dbias[kc]+=*ptr;
+			}
+		}
+	}
+}
+
+const char *extensions[]=
+{
+	"jpg",
+	"jpeg",
+	"png",
+};
+unsigned char *load_nextimage(const char *path, ArrayHandle filenames, int *ki, int *iw, int *ih, int *warp)
+{
+	unsigned char *image=0;
+	int nch=0, loaded=0;
+	for(int ki2=*ki;;)
+	{
+		ArrayHandle *filename=(ArrayHandle*)array_at(&filenames, ki2);
+		image=stbi_load(filename[0]->data, iw, ih, &nch, 4);
+		if(image)
+		{
+			*ki=ki2;
+			loaded=1;
+			break;
+		}
+		*warp|=ki2+1>=(int)filenames->count;
+		ki2=(ki2+1)%(int)filenames->count;
+		if(ki2==*ki)
+			break;
+	}
+	ASSERT_MSG(loaded, "No images found in \'%s\'", path);
+	return image;
+}
+void assign_sample(const unsigned char *image, int iw, int ih, int px, int py, Buffer *input, int kb)//1:1
+{
+	double gain=1./255;
+	for(int kc=0;kc<input->shape[1];++kc)//for each input channel
+	{
+		for(int ky=0;ky<input->shape[2];++ky)
+		{
+			double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+			int ky2=ky+py;
+			if((unsigned)ky2<(unsigned)ih)
+			{
+				for(int kx=0;kx<input->shape[3];++kx)
+				{
+					int kx2=kx+px;
+					if((unsigned)kx2<(unsigned)ih)
+						dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
+				}
+			}
+		}
+	}
+}
+int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Model *model)
+{
+	static unsigned char *image=0;
+	static int ki0=-1, iw=0, ih=0;
+	
+	int warp=0;
+	Buffer *input=(Buffer*)array_at(&model->buffers, model->input);
+	memset(input->data, 0, input->shape[0]*input->shape[1]*input->shape[2]*input->shape[3]*sizeof(double));
+	switch(model->aug)
+	{
+	case AUG_BLOCK://partition image to blocks
+		{
+			if(*ki!=ki0)
+			{
+				free(image);
+				image=load_nextimage(path, filenames, ki, &iw, &ih, &warp);
+				ki0=*ki;
+			}
+			int bcx=(iw+input->shape[3]-1)/input->shape[3],//ceil division
+				bcy=(ih+input->shape[2]-1)/input->shape[2];
+			int nblocks=bcx*bcy;
+			int imsize=iw*ih;
+			for(int kb=0;kb<input->shape[0];++kb, ++*kblock)//for each sample in batch
+			{
+				if(*kblock==nblocks)
+				{
+					warp|=*ki+1>=(int)filenames->count;
+					*ki=(*ki+1)%(int)filenames->count;
+					free(image);
+					image=load_nextimage(path, filenames, ki, &iw, &ih, &warp);
+					ki0=*ki, *kblock=0;
+				}
+				int px=(*kblock%bcx)*input->shape[3],
+					py=(*kblock/bcx)*input->shape[2];
+				assign_sample(image, iw, ih, px, py, input, kb);
+			}
+		}
+		break;
+	case AUG_RANDCROP://take one random block at 1:1 scale from each image
+		for(int kb=0;kb<input->shape[0];++kb)//for each sample in batch
+		{
+			free(image);
+			image=load_nextimage(path, filenames, ki, &iw, &ih, &warp);
+			warp|=*ki+1>=(int)filenames->count;
+			*ki=(*ki+1)%(int)filenames->count;
+			ki0=*ki, *kblock=0;
+
+			int px=iw<=input->shape[3]?0:rand()%(iw-input->shape[3]),
+				py=ih<=input->shape[2]?0:rand()%(ih-input->shape[2]);
+			assign_sample(image, iw, ih, px, py, input, kb);
+		}
+		break;
+	case AUG_STRETCH://stretch image (smaller or larger dimensions), nearest for now
+		{
+			double gain=1./255;
+			for(int kb=0;kb<input->shape[0];++kb)//for each sample in batch
+			{
+				free(image);
+				image=load_nextimage(path, filenames, ki, &iw, &ih, &warp);
+				warp|=*ki+1>=(int)filenames->count;
+				*ki=(*ki+1)%(int)filenames->count;
+				ki0=*ki, *kblock=0;
+
+				for(int kc=0;kc<input->shape[1];++kc)//for each input channel
+				{
+					for(int ky=0;ky<input->shape[2];++ky)
+					{
+						double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+						int ky2=ky*iw/input->shape[2];
+						for(int kx=0;kx<input->shape[3];++kx)
+						{
+							int kx2=kx*iw/input->shape[3];
+							dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
+						}
+					}
+				}
+			}
+		}
+		break;
+	}
+	return warp;
+}
+
 Model model={0};
 #endif
 
@@ -1163,23 +1574,82 @@ int main(int argc, char **argv)
 	model.input_shape[0]=atoi(argv[4]);//Batch size
 	parse_model(argc==5?"model.txt":argv[5], &model);
 
+	ASSERT_MSG(model.input_shape[1]==3, "Only 3 input channels are currently supported");
+
+	//read dataset directory
+	ArrayHandle dspath=filter_path(argv[1]);
+	ArrayHandle filenames=get_filenames(argv[1], extensions, COUNTOF(extensions));
+	ASSERT_MSG(filenames->count, "No images in dataset path \'%s\'", argv[1]);
+
 	//train
-	double loss=0;
-	for(int ke=0;ke<epoch;++ke)
+	double av_loss=0, loss=_HUGE;
+	int nbatches=0;
+	int ki=0,//points at current image to load
+		kblock=0;//points at current image block in case of block augmentation
+	double timestamp1=time_ms();
+	for(int ke=0;;)
 	{
 		//load data
+		int epoch_inc=load_data(argv[1], filenames, &ki, &kblock, &model);
+		if(epoch_inc)
+		{
+			double timestamp2=time_ms();
+			++ke;
+			av_loss/=nbatches;
+			double psnr=20*log10(255/av_loss);
+			acme_strftime(g_buf, G_BUF_SIZE, (timestamp2-timestamp1)/1000);
+			printf("\t\t\t\t\rEpoch %3d RMSE %16.12lf PSNR %13.9lf %10lf minutes %s\n", ke, av_loss, psnr, (timestamp2-timestamp1)/60000, g_buf);
+			av_loss=0, nbatches=0;
+			if(ke>=epoch)
+				break;
+			timestamp1=time_ms();
+		}
 
 		//forward
 		for(int ki=0;ki<(int)model.instructions->count;++ki)
 		{
 			Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+#ifdef DEBUG_AUTOGRAD
+			const char *a=0;
+			switch(inst->op)
+			{
+			case OP_CC2			:a="OP_CC2      ";break;
+			case OP_CONV2		:a="OP_CONV2    ";break;
+			case OP_RELU		:a="OP_RELU     ";break;
+			case OP_LRELU		:a="OP_LRELU    ";break;
+			case OP_QUANTIZER	:a="OP_QUANTIZER";break;
+			case OP_MSE			:a="OP_MSE      ";break;
+			case OP_MS_SSIM		:a="OP_MS_SSIM  ";break;
+			}
+			printf("fwd %d/%d %s\n", ki+1, (int)model.instructions->count, a);//
+#endif
 			switch(inst->op)
 			{
 			case OP_CC2:
-				cc2d_fwd(&model, inst);
+				{
+					Buffer
+						*bufx=(Buffer*)array_at(&model.buffers, inst->fwd_args[0]),
+						*buff=(Buffer*)array_at(&model.buffers, inst->fwd_args[1]),
+						*bufb=(Buffer*)array_at(&model.buffers, inst->fwd_args[2]),
+						*buf2=(Buffer*)array_at(&model.buffers, inst->fwd_result);
+//#ifdef DEBUG_AUTOGRAD
+//					printf("fwd %d %d %d result %d, out shape [%d %d %d %d]\n",
+//						inst->fwd_args[0], inst->fwd_args[1], inst->fwd_args[2], inst->fwd_result,
+//						buf2->shape[0], buf2->shape[1], buf2->shape[2], buf2->shape[3]);//
+//#endif
+					crosscorrelation2d(&model, bufx, buff, bufb, buf2, 1);
+				}
 				continue;
 			case OP_CONV2:
 				LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
+				//{
+				//	Buffer
+				//		*bufx=(Buffer*)array_at(&model.buffers, inst->fwd_args[0]),
+				//		*buff=(Buffer*)array_at(&model.buffers, inst->fwd_args[1]),
+				//		*bufb=(Buffer*)array_at(&model.buffers, inst->fwd_args[2]),
+				//		*buf2=(Buffer*)array_at(&model.buffers, inst->fwd_result);
+				//	conv2d(&model, bufx, buff, bufb, buf2, 1);
+				//}
 				continue;
 			case OP_LRELU:
 				{
@@ -1237,27 +1707,92 @@ int main(int argc, char **argv)
 		for(int ki=(int)model.instructions->count-1;ki>=0;--ki)
 		{
 			Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+#ifdef DEBUG_AUTOGRAD
+			const char *a=0;
+			switch(inst->op)
+			{
+			case OP_CC2			:a="OP_CC2      ";break;
+			case OP_CONV2		:a="OP_CONV2    ";break;
+			case OP_RELU		:a="OP_RELU     ";break;
+			case OP_LRELU		:a="OP_LRELU    ";break;
+			case OP_QUANTIZER	:a="OP_QUANTIZER";break;
+			case OP_MSE			:a="OP_MSE      ";break;
+			case OP_MS_SSIM		:a="OP_MS_SSIM  ";break;
+			}
+			printf("bwd %d/%d %s\n", ki+1, (int)model.instructions->count, a);//
+#endif
 			switch(inst->op)
 			{
 			case OP_CC2:
+				{
+					Buffer
+						*dL_dnet	=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
+						*filt		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+						*x			=(Buffer*)array_at(&model.buffers, inst->bwd_args[2]),
+						*dL_dx		=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]),
+						*dL_dfilt	=(Buffer*)array_at(&model.buffers, inst->bwd_results[1]),
+						*dL_dbias	=(Buffer*)array_at(&model.buffers, inst->bwd_results[2]);
+					dcrosscorrelation_dx_2d(&model, dL_dnet, filt, dL_dx);
+					dcrosscorrelation_dfilt_2d(&model, dL_dnet, x, dL_dfilt, inst->info[0], inst->info[1]);
+					dcrosscorrelation_dbias_2d(&model, dL_dnet, dL_dbias);
+				}
 				break;
 			case OP_CONV2:
+				LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
 				break;
 			case OP_LRELU:
+				{
+					Buffer
+						*dL_dx2		=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
+						*net		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+						*dL_dnet	=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
+					ASSERT_MSG(dL_dx2->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dx2->type);
+					ASSERT_MSG(net->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", net->type);
+					ASSERT_MSG(dL_dnet->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dnet->type);
+					size_t size=net->shape[0]*net->shape[1]*net->shape[2]*net->shape[3];
+					for(int k=0;k<size;++k)//dL_dx2 .* act'(net)
+					{
+						double x=net->data[k];
+						dL_dnet->data[k]=dL_dx2->data[k];
+						if(x<0)
+							dL_dnet->data[k]*=0.01;
+					}
+				}
 				break;
 			case OP_RELU:
+				{
+					Buffer
+						*dL_dx2		=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
+						*net		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+						*dL_dnet	=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
+					ASSERT_MSG(dL_dx2->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dx2->type);
+					ASSERT_MSG(net->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", net->type);
+					ASSERT_MSG(dL_dnet->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dnet->type);
+					size_t size=net->shape[0]*net->shape[1]*net->shape[2]*net->shape[3];
+					for(int k=0;k<size;++k)//dL_dx2 .* act'(net)
+					{
+						double x=net->data[k];
+						dL_dnet->data[k]=x<0?0:dL_dx2->data[k];
+					}
+				}
 				break;
-			case OP_QUANTIZER:
-				break;
-			case OP_MSE:
+			case OP_QUANTIZER://identity
+			case OP_MSE://identity
 				break;
 			case OP_MS_SSIM:
+				LOG_ERROR("MS-SSIM is not supported yet.");
 				break;
 			default:
-				LOG_ERROR("Unrecognized instruction type %d.", inst->op);
+				LOG_ERROR("Unrecognized instruction %d.", inst->op);
 				break;
 			}
 		}
+
+		loss=sqrt(loss);
+		av_loss+=loss;
+		++nbatches;
+
+		printf("\r%d/%d = %5.2lf%% RMSE %16.12lf\t\t", ki+1, (int)filenames->count, 100.*(ki+1)/filenames->count, loss);
 	}
 
 	save_model(&model, 0);

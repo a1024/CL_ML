@@ -62,7 +62,7 @@ int		log_error(const char *file, int line, int quit, const char *format, ...)
 {
 	int firsttime=error_first[0]=='\0';
 
-	size_t size=strlen(file), start=size-1;
+	ptrdiff_t size=(ptrdiff_t)strlen(file), start=size-1;
 	for(;start>=0&&file[start]!='/'&&file[start]!='\\';--start);
 	start+=start==-1||file[start]=='/'||file[start]=='\\';
 
@@ -82,7 +82,7 @@ int		log_error(const char *file, int line, int quit, const char *format, ...)
 	if(quit)
 	{
 		pause();
-		abort();
+		exit(1);
 	}
 	return 0;
 }
