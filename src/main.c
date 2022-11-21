@@ -16,6 +16,8 @@
 #include"stb_image.h"
 static const char file[]=__FILE__;
 
+//	#define FIXED_PREC
+
 //	#define DEBUG_SAVER
 //	#define DEBUG_AUTOGRAD
 
@@ -33,6 +35,16 @@ int set_console_buffer_size(short w, short h)
 #define set_console_buffer_size(...)
 #endif
 
+int acme_print_memsize(char *buf, size_t bufsize, size_t memsize)
+{
+	if(memsize<1024)
+		return sprintf_s(buf, bufsize, "%d Bytes", memsize);
+	if(memsize<1024*1024)
+		return sprintf_s(buf, bufsize, "%lf KB", (double)memsize*(1./1024));
+	if(memsize<1024*1024*1024)
+		return sprintf_s(buf, bufsize, "%lf MB", (double)memsize*(1./(1024*1024)));
+	return sprintf_s(buf, bufsize, "%lf GB", (double)memsize*(1./(1024*1024*1024)));
+}
 int acme_strftime(char *buf, size_t size, double seconds)
 {
 	int hours=(int)floor(seconds/3600), minutes;
@@ -149,8 +161,31 @@ ArrayHandle get_filenames(const char *path, const char **extensions, int extCoun
 	array_free(&searchpath);
 	return filenames;
 }
+void print_2d(const float *buf, int H, int W, int hex, const char *msg, ...)
+{
+	va_list args;
+	if(msg)
+	{
+		va_start(args, msg);
+		vprintf(msg, args);
+		va_end(args);
+		printf("\n");
+	}
+	const char *a;
+	if(hex)
+		a="%08X, ";
+	else
+		a="%f, ";
+	for(int ky=0;ky<H;++ky)
+	{
+		for(int kx=0;kx<W;++kx)
+			printf(a, buf[W*ky+kx]);
+		printf("\n");
+	}
+	printf("\n");
+}
 
-#if 0
+#if 1
 unsigned nplatforms=0, ndevices=0;
 cl_platform_id *platforms=0;
 cl_device_id *devices=0;
@@ -158,6 +193,119 @@ size_t maxlocalsize=0;
 cl_context context=0;
 cl_command_queue commandqueue=0;
 cl_program program=0;
+
+typedef enum		CLKernelIdxEnum
+{
+#define				CLKERNEL(LABEL)	OCL_##LABEL,
+#include			"cl_kernel_names.h"
+#undef				CLKERNEL
+	OCL_NKERNELS,
+} CLKernelIdx;
+const char			*kernelnames[]=
+{
+#define				CLKERNEL(LABEL)	#LABEL,
+#include			"cl_kernel_names.h"
+#undef				CLKERNEL
+#ifdef __INTELLISENSE__
+	0,
+#endif
+};
+cl_kernel			kernels[OCL_NKERNELS]={0};
+void				ocl_init(const char *srcname)
+{
+	int error;
+
+	oclw_loadAPI();
+
+	error=p_clGetPlatformIDs(0, 0, &nplatforms);		CL_CHECK(error);
+	ASSERT_MSG(nplatforms, "No OpenCL platforms");
+	
+	platforms=(cl_platform_id*)malloc(nplatforms*sizeof(cl_platform_id));
+	error=p_clGetPlatformIDs(nplatforms, platforms, 0);	CL_CHECK(error);
+
+	error=p_clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 0, 0, &ndevices);	CL_CHECK(error);
+	ASSERT_MSG(ndevices, "No OpenCL devices");
+
+	devices=(cl_device_id*)malloc(ndevices*sizeof(cl_device_id));
+	error=p_clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, ndevices, devices, 0);	CL_CHECK(error);
+	
+	//get info
+	size_t retlen=0;
+	error=p_clGetPlatformInfo(platforms[0], CL_PLATFORM_VERSION, G_BUF_SIZE, g_buf, &retlen);CL_CHECK(error);
+	printf("OpenCL platform: %s\n", g_buf);
+	error=p_clGetDeviceInfo(devices[0], CL_DEVICE_NAME, G_BUF_SIZE, g_buf, &retlen);	CL_CHECK(error);
+	printf("Device: %s\n", g_buf);
+	error=p_clGetDeviceInfo(devices[0], CL_DEVICE_VENDOR, G_BUF_SIZE, g_buf, &retlen);	CL_CHECK(error);
+	printf("Vendor: %s\n", g_buf);
+	error=p_clGetDeviceInfo(devices[0], CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), &maxlocalsize, &retlen);	CL_CHECK(error);
+	printf("CL_DEVICE_MAX_WORK_GROUP_SIZE = %d\n", (int)maxlocalsize);
+	error=p_clGetDeviceInfo(devices[0], CL_DEVICE_ADDRESS_BITS, sizeof(size_t), &maxlocalsize, &retlen);	CL_CHECK(error);
+	printf("CL_DEVICE_ADDRESS_BITS = %d\n", (int)maxlocalsize);
+	error=p_clGetDeviceInfo(devices[0], CL_DEVICE_EXTENSIONS, G_BUF_SIZE, g_buf, &retlen);	CL_CHECK(error);
+	for(int k=0;k<retlen;++k)
+		if(g_buf[k]==' ')
+			g_buf[k]='\n';
+	printf("Extensions:\n%s\n", g_buf);
+	//int cl_gl_interop=strstr(g_buf, "cl_khr_gl_sharing")!=0;
+	//if(!cl_gl_interop)
+	//	printf("\n\tcl_khr_gl_sharing not supported\n\n");
+	
+	//create context & command queue
+#ifdef CL_GL_INTEROP
+	cl_context_properties properties[8]={};
+	if(cl_gl_interop)
+	{
+		auto gl_context=eglGetCurrentContext();//changes when resuming
+		auto egl_display=eglGetCurrentDisplay();
+		properties[0]=CL_GL_CONTEXT_KHR,	properties[1]=(cl_context_properties)gl_context;//https://stackoverflow.com/questions/26802905/getting-opengl-buffers-using-opencl
+		properties[2]=CL_EGL_DISPLAY_KHR,	properties[3]=(cl_context_properties)egl_display;
+		properties[4]=CL_CONTEXT_PLATFORM,	properties[5]=(cl_context_properties)platform;
+		properties[6]=0, properties[7]=0;
+	}
+	else
+	{
+		properties[0]=CL_CONTEXT_PLATFORM, properties[1]=(cl_context_properties)platform;
+		properties[2]=0, properties[3]=0;
+	}
+	context=p_clCreateContext(properties, 1, &devices[0], nullptr, nullptr, &error);	CL_CHECK(error);
+#else
+	context=p_clCreateContext(0, ndevices, devices, 0, 0, &error);			CL_CHECK(error);
+#endif
+	commandqueue=p_clCreateCommandQueue(context, devices[0], 0, &error);	CL_CHECK(error);
+
+	//compile kernel
+	ArrayHandle srctext=load_text(srcname, 0);
+	ASSERT_MSG(srctext, "Cannot open \'%s\'", srcname);
+	const char *k_src=(const char*)srctext->data;
+	size_t k_len=srctext->count;
+	program=p_clCreateProgramWithSource(context, 1, (const char**)&k_src, &k_len, &error);	CL_CHECK(error);
+	const char defines[]="-D__OPEN_CL__"
+#ifdef FIXED_PREC
+		" -DFIXED_PREC"
+#endif
+		;
+	error=p_clBuildProgram(program, 1, devices, defines, 0, 0);
+	if(error)
+	{
+		error=p_clGetProgramBuildInfo(program, devices[0], CL_PROGRAM_BUILD_LOG, G_BUF_SIZE, g_buf, &retlen);
+		if(retlen>G_BUF_SIZE)
+		{
+			char *buf=(char*)malloc(retlen+10);
+			error=p_clGetProgramBuildInfo(program, devices[0], CL_PROGRAM_BUILD_LOG, retlen+10, buf, &retlen);	CL_CHECK(error);
+			printf("\nOpenCL Compilation failed:\n%s\n", buf);
+			free(buf);
+			LOG_ERROR("Aborting");
+		}
+		else
+			LOG_ERROR("\nOpenCL Compilation failed:\n%s\n", g_buf);
+	}
+
+	for(int k=0;k<OCL_NKERNELS;++k)
+	{
+		kernels[k]=p_clCreateKernel(program, kernelnames[k], &error);
+		ASSERT_MSG(!error, "Couldn't find kernel %s", kernelnames[k]);
+	}
+}
 #endif
 
 #if 1
@@ -264,14 +412,14 @@ void ReLU_d(const double *src, double *dst, int N)
 	for(int k=0;k<N;++k)
 		dst[k]=src[k]<0?0:1;
 }
-void mix_inplace(double *dst, const double *src, double x, int N)//dst = x*dst + (1-x)*src
+void mix_inplace(double *dst, const double *src, double x, size_t N)//dst = x*dst + (1-x)*src
 {
-	for(int k=0;k<N;++k)
+	for(ptrdiff_t k=0;k<(ptrdiff_t)N;++k)
 		dst[k]=src[k]+(dst[k]-src[k])*x;
 }
-void sq_inplace(double *x, int N)
+void sq_inplace(double *x, size_t N)
 {
-	for(int k=0;k<N;++k)
+	for(ptrdiff_t k=0;k<(ptrdiff_t)N;++k)
 		x[k]*=x[k];
 }
 void print_1d(const double *x, int N, const char *msg, ...)
@@ -322,6 +470,7 @@ double adam_m[nParams]={0}, adam_v[nParams]={0};
 
 //automatic differentiation in 2D
 #if 1
+int using_gpu=0;
 typedef enum AugmentationTypeEnum
 {
 	AUG_BLOCK,		//image is padded then partitioned to HxW blocks
@@ -363,12 +512,13 @@ typedef struct InstructionStruct
 {
 	InstType op;
 	int fwd_args[3], fwd_result, bwd_args[3], bwd_results[3],//indices
-		info[4];//[xpad, ypad, xstride, ystride], or [quantization_nlevels]
+		info[4],//[xpad, ypad, xstride, ystride], or [quantization_nlevels]
+		save_result;
 } Instruction;
 typedef enum BufferTypeEnum
 {
 	//use buf->data
-	BUF_NORMAL,
+	BUF_NORMAL, BUF_NORMAL_SAVED,
 
 	//use model->params->data+buf->offset*sizeof(double)
 	BUF_PARAM, BUF_GRAD,
@@ -384,6 +534,7 @@ typedef struct BufferStruct
 	{
 		size_t offset;
 		double *data;
+		cl_mem gpu_buf;
 	};
 
 	//size_t param_offset,//		if !data:			buffer is a learnable parameter, use model->params->data+param_offset*sizeof(double)
@@ -397,27 +548,60 @@ typedef struct ModelStruct
 		is_test,
 		input;//index in buffers
 	ArrayHandle
-		src,	//a string, the source code
-		instructions,//array of Instruction
-		buffers,//array of Buffer
-		params, grad, adam_m, adam_v;//arrays of double (same size)
-} Model, *ModelHandle;
+		src,				//string with the model source code, for saving
+		testpath, trainpath,//strings with paths to datasets
+		instructions,	//array of Instruction
+		buffers;		//array of Buffer/cl_mem, depending on using_gpu
+	size_t nparams;
+	union
+	{
+		struct
+		{
+			ArrayHandle cpu_params, cpu_grad, cpu_adam_m, cpu_adam_v;//arrays of double (same size)
+		};
+		struct
+		{
+			cl_mem gpu_params, gpu_grad, gpu_adam_m, gpu_adam_v;
+		};
+	};
+	float *gpu_input, *gpu_output;
+} Model;
 void free_buffer(void *p)
 {
 	Buffer *buf=(Buffer*)p;
-	if(buf->type==BUF_NORMAL)
-		free(buf->data);
+	if(buf->type==BUF_NORMAL||buf->type==BUF_NORMAL_SAVED)
+	{
+		if(using_gpu)
+		{
+			int error=p_clReleaseMemObject(buf->gpu_buf);
+			CL_CHECK(error);
+			buf->gpu_buf=0;
+		}
+		else
+			free(buf->data);
+	}
 }
 void free_model(void *p)
 {
 	Model *model=(Model*)p;
-	array_free(&model->adam_m);
-	array_free(&model->adam_v);
-	array_free(&model->grad);
-	array_free(&model->params);
 	array_free(&model->src);
 	array_free(&model->instructions);
 	array_free(&model->buffers);
+	if(using_gpu)
+	{
+		int error;
+		error=p_clReleaseMemObject(model->gpu_params);	CL_CHECK(error);	model->gpu_params=0;
+		error=p_clReleaseMemObject(model->gpu_grad);	CL_CHECK(error);	model->gpu_grad=0;
+		error=p_clReleaseMemObject(model->gpu_adam_m);	CL_CHECK(error);	model->gpu_adam_m=0;
+		error=p_clReleaseMemObject(model->gpu_adam_v);	CL_CHECK(error);	model->gpu_adam_v=0;
+	}
+	else
+	{
+		array_free(&model->cpu_adam_m);
+		array_free(&model->cpu_adam_v);
+		array_free(&model->cpu_grad);
+		array_free(&model->cpu_params);
+	}
 }
 typedef struct VariableStruct
 {
@@ -428,6 +612,47 @@ void free_variable(void *p)
 {
 	Variable *var=(Variable*)p;
 	array_free(&var->name);
+}
+
+void preview_cl_buffer(Buffer *buf, cl_mem clbuf, size_t offset, size_t bufsize)
+{
+	size_t size=bufsize?bufsize:buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
+	float *buffer=(float*)malloc(size*sizeof(float));
+	int error=p_clEnqueueReadBuffer(commandqueue, clbuf?clbuf:buf->gpu_buf, CL_TRUE, offset, size*sizeof(float), buffer, 0, 0, 0);	CL_CHECK(error);
+	if(bufsize)
+	{
+		for(int k=0;k<bufsize;++k)
+			printf("%4d %g\n", k, buffer[k]);
+	}
+	else
+	{
+		int dx=10, dy=50, dc=2;
+		if(dx>buf->shape[3])
+			dx=buf->shape[3];
+		if(dy>buf->shape[2])
+			dy=buf->shape[2];
+		if(dc>buf->shape[1])
+			dc=buf->shape[1];
+		for(int kc=0;kc<dc;++kc)
+		{
+			for(int ky=0;ky<dy;++ky)
+			{
+				for(int kx=0;kx<dx;++kx)
+					printf("%g ", buffer[buf->shape[3]*(buf->shape[2]*kc+ky)+kx]);
+				printf("\n");
+			}
+			printf("\n");
+		}
+	}
+	printf("\n");
+	for(int k=0;k<size;++k)
+	{
+		if(!isfinite(buffer[k])||fabsf(buffer[k])>1e9)
+		{
+			printf("%d: %g\n", k, buffer[k]);
+			break;
+		}
+	}
 }
 
 //parser
@@ -582,8 +807,67 @@ int				parse_number(const char *filename, ArrayHandle text, int *ctx, int base, 
 		*ret_val=sign*val;
 	return success;
 }
+#if 0
+void			skip_until(ArrayHandle text, int *ctx, char c)
+{
+	for(;text->data[*ctx]&&text->data[*ctx]!=c;++*ctx)
+	{
+		if(text->data[*ctx]=='\n')
+		{
+			++ctx[1];
+			ctx[2]=*ctx;
+		}
+	}
+}
+#endif
+ArrayHandle		get_path(const char *filename, ArrayHandle text, int *ctx)
+{
+	ArrayHandle ret;
+	size_t start, end;
+	char c=text->data[*ctx];
+	if(c=='\''||c=='\"')
+	{
+		++*ctx;//skip opening quote
+		start=*ctx;
+		for(;*ctx<text->count&&text->data[*ctx]!=c;++*ctx)
+		{
+			if(text->data[*ctx]=='\n')
+			{
+				++ctx[1];
+				ctx[2]=*ctx;
+				LOG_ERROR("%s(%d): Missing closing \'%c\'. Path cannot contain newlines", filename, ctx[1], c);
+				break;
+			}
+		}
+		end=*ctx;
+		++*ctx;//skip closing quote
+	}
+	else
+	{
+		start=*ctx;
+		for(;text->data[*ctx]&&!isspace(text->data[*ctx]);++*ctx);
+		end=*ctx;
+	}
+	STR_COPY(ret, text->data+start, end-start);
+	for(int k=0;k<ret->count;++k)
+	{
+		if(ret->data[k]=='\\')
+			ret->data[k]='/';
+	}
+	if(ret->data[ret->count-1]=='/')
+	{
+		ret->data[ret->count-1]='\0';
+		--ret->count;
+	}
+	int result=file_is_readable((char*)ret->data);
+	ASSERT_MSG(result, "Path doesn't exist: \'%s\'", ret->data);
+	ASSERT_MSG(result==2, "Path is a file, expected a folder: \'%s\'", ret->data);
+	STR_APPEND(ret, "/", 1, 1);
+	return ret;
+}
 
 const char
+	kw_train[]="train", kw_test[]="test",
 	kw_block[]="block", kw_randcrop[]="randcrop", kw_stretch[]="stretch",
 	kw_save[]="save",
 	kw_cc[]="cc", 
@@ -595,12 +879,13 @@ const char
 		kw_msssim[]="ms-ssim",
 	kw_weights[]="weights";
 const char
+	*ksearch_dataset[]={kw_train, kw_test},
 	*ksearch_aug[]={kw_block, kw_randcrop, kw_stretch},
 	*ksearch_global[]={kw_cc, kw_conv, kw_save, kw_quantize, kw_loss},
 	*ksearch_nl[]={kw_lrelu, kw_relu},
 	*ksearch_loss[]={kw_mse, kw_msssim};
 
-void parse_conv(const char *filename, ArrayHandle text, int *ctx, ModelHandle model, ArrayHandle variables, int match)
+void parse_conv(const char *filename, ArrayHandle text, int *ctx, Model* model, ArrayHandle variables, int match)
 {
 	Instruction *inst;
 	Buffer *buffer;
@@ -745,10 +1030,11 @@ void parse_conv(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 	inst[1].bwd_args[1]=nbuffers+6;		//x2
 	inst[1].bwd_results[0]=nbuffers+5;	//dL_dnet
 }
-void parse_save(const char *filename, ArrayHandle text, int *ctx, ModelHandle model, ArrayHandle *variables)
+void parse_save(const char *filename, ArrayHandle text, int *ctx, Model* model, ArrayHandle *variables)
 {
 	Variable *var;
 	int start;
+	Instruction *inst;
 
 	skip_ws(text, ctx);
 	start=*ctx;
@@ -768,13 +1054,13 @@ void parse_save(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 	STR_COPY(var->name, text->data+start, *ctx-start);
 	if(model->instructions->count)
 	{
-		Instruction *inst=(Instruction*)array_at(&model->instructions, model->instructions->count-1);
+		inst=(Instruction*)array_at(&model->instructions, model->instructions->count-1);
 		var->buffer=inst->fwd_result;
 	}
 	else
 		var->buffer=-1;
 }
-void parse_quantize(const char *filename, ArrayHandle text, int *ctx, ModelHandle model, ArrayHandle variables)
+void parse_quantize(const char *filename, ArrayHandle text, int *ctx, Model* model, ArrayHandle variables)
 {
 	Instruction *inst;
 	Buffer *buffer;
@@ -841,7 +1127,7 @@ int match_varname(const char *varname, int len, ArrayHandle variables)
 	}
 	return -1;
 }
-void parse_loss(const char *filename, ArrayHandle text, int *ctx, ModelHandle model, ArrayHandle variables)
+void parse_loss(const char *filename, ArrayHandle text, int *ctx, Model* model, ArrayHandle variables)
 {
 	Instruction *inst;
 	Buffer *buffer;
@@ -884,7 +1170,8 @@ void parse_loss(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 		*buf1=(Buffer*)array_at(&model->buffers, b1),
 		*buf2=(Buffer*)array_at(&model->buffers, b2),
 		*diff=buffer;
-	ASSERT_MSG(!memcmp(buf1->shape, buf2->shape, sizeof(buf2->shape)), "%s(%d): Loss function expects two buffers of identical shape, got %dx%dx%dx%d & %dx%dx%dx%d", filename, ctx[1],
+	ASSERT_MSG(!memcmp(buf1->shape, buf2->shape, sizeof(buf2->shape)),
+		"%s(%d): Loss function expects two buffers of identical shape, got [%d %d %d %d] and [%d %d %d %d]", filename, ctx[1],
 		buf1->shape[0], buf1->shape[1], buf1->shape[2], buf1->shape[3], buf2->shape[0], buf2->shape[1], buf2->shape[2], buf2->shape[3]);
 	memcpy(diff->shape, buf1->shape, sizeof(buf1->shape));
 	diff->type=BUF_NORMAL;
@@ -894,7 +1181,7 @@ void parse_loss(const char *filename, ArrayHandle text, int *ctx, ModelHandle mo
 	inst->fwd_result=nbuffers;
 	inst->bwd_results[0]=nbuffers;
 }
-void init_model(ModelHandle model)
+void init_model(Model* model)
 {
 	//for(int ki=0;ki<(int)model->instructions->count;++ki)//Xavier initialization
 	//{
@@ -902,6 +1189,10 @@ void init_model(ModelHandle model)
 	//}
 	double gain=1./RAND_MAX;
 	size_t kp=0;
+	ArrayHandle temp=0;
+	int error;
+	if(using_gpu)
+		ARRAY_ALLOC(float, temp, 0, model->nparams, 0, 0);
 	for(int kb=0;kb<(int)model->buffers->count;++kb)
 	{
 		Buffer *buf=(Buffer*)array_at(&model->buffers, kb);
@@ -909,15 +1200,38 @@ void init_model(ModelHandle model)
 		{
 			size_t bufsize=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
 			double g2=gain*sqrt(6./(buf->shape[0]+buf->shape[1]));
-			for(size_t k0=0;k0<bufsize;++k0, ++kp)
+			if(using_gpu)
 			{
-				double *val=(double*)array_at(&model->params, kp);
-				*val=(rand()-(RAND_MAX>>1))*g2;//[-0.5, 0.5]
+				for(size_t k0=0;k0<bufsize;++k0, ++kp)
+				{
+					float *val=(float*)array_at(&temp, kp);
+					*val=(float)((rand()-(RAND_MAX>>1))*g2);//[-0.5, 0.5]
+#ifdef FIXED_PREC
+					*(int*)val=*val*0x10000;
+#endif
+					//printf("%4d: %08X %g\n", kp, *(int*)val, *val);
+				}
+			}
+			else
+			{
+				for(size_t k0=0;k0<bufsize;++k0, ++kp)
+				{
+					double *val=(double*)array_at(&model->cpu_params, kp);
+					*val=(rand()-(RAND_MAX>>1))*g2;//[-0.5, 0.5]
+				}
 			}
 		}
 	}
+	if(using_gpu)
+	{
+		error=p_clEnqueueWriteBuffer(commandqueue, model->gpu_params, CL_TRUE, 0, model->nparams*sizeof(float), temp->data, 0, 0, 0);	CL_CHECK(error);
+		array_free(&temp);
+#if 0
+		preview_cl_buffer(0, model->gpu_params, 0, model->nparams);//
+#endif
+	}
 }
-void parse_model(const char *filename, ModelHandle model)
+size_t parse_model(const char *filename, Model* model)
 {
 	ArrayHandle text=load_text(filename, 0),
 		variables;//array of Variable
@@ -927,7 +1241,28 @@ void parse_model(const char *filename, ModelHandle model)
 	if(!text)
 		LOG_ERROR("Cannot open \'%s\'\n", filename);
 
-	ARRAY_ALLOC(Variable, variables, 0, 0, 0, free_variable);
+	model->trainpath=0;
+	model->testpath=0;
+	for(int k=0;k<2;++k)
+	{
+		skip_ws(text, ctx);
+		match=match_kw(text, ctx, ksearch_dataset, COUNTOF(ksearch_dataset));
+		switch(match)
+		{
+		case -1:
+			LOG_ERROR("%s(%d): Expected \'train\' or \'test\'", filename, ctx[1]);
+		case 0:
+			ASSERT_MSG(!model->trainpath, "Train path already encountered");
+			skip_ws(text, ctx);
+			model->trainpath=get_path(filename, text, ctx);
+			break;
+		case 1:
+			ASSERT_MSG(!model->testpath, "Test path already encountered");
+			skip_ws(text, ctx);
+			model->testpath=get_path(filename, text, ctx);
+			break;
+		}
+	}
 
 	skip_ws(text, ctx);
 	match=match_kw(text, ctx, ksearch_aug, COUNTOF(ksearch_aug));
@@ -964,6 +1299,7 @@ void parse_model(const char *filename, ModelHandle model)
 
 	ARRAY_ALLOC(Instruction, model->instructions, 0, 0, 0, 0);
 	ARRAY_ALLOC(Buffer, model->buffers, 0, 0, 0, free_buffer);
+	ARRAY_ALLOC(Variable, variables, 0, 0, 0, free_variable);
 
 	for(;;)
 	{
@@ -993,18 +1329,53 @@ void parse_model(const char *filename, ModelHandle model)
 	}
 
 	STR_COPY(model->src, text->data, *ctx);
-
-	//allocate buffers
-	size_t nParams=0, nGrad=0;
+	
+	//print memory requirement
+	size_t memusage=0;
 	for(int k=0;k<(int)model->buffers->count;++k)
 	{
 		Buffer *buf=array_at(&model->buffers, k);
 		size_t bufsize=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
-		ASSERT_MSG(bufsize, "%s: Buffer %d size is zero", filename, k);
+		ASSERT_MSG(bufsize, "%s: Buffer %d size is zero, [%d %d %d %d]", filename, k, buf->shape[0], buf->shape[1], buf->shape[2], buf->shape[3]);
+		if(using_gpu)
+			bufsize*=sizeof(float);
+		else
+			bufsize*=sizeof(double);
+		memusage+=bufsize;
+	}
+	acme_print_memsize(g_buf, G_BUF_SIZE, memusage);
+	printf("Allocating %s of %s memory", g_buf, using_gpu?"GPU":"CPU");
+	if(memusage>0x7FFFFFFF)
+	{
+		printf(", continue? [Y/N] ");
+		char c=0;
+		scanf(" %c", &c);
+		if((c&0xDF)!='Y')
+			exit(0);
+	}
+	else
+		printf("\n");
+
+	//allocate buffers
+	size_t nParams=0, nGrad=0;
+	int error=0;
+	memusage=0;
+	for(int k=0;k<(int)model->buffers->count;++k)
+	{
+		Buffer *buf=array_at(&model->buffers, k);
+		size_t bufsize=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
 		switch(buf->type)
 		{
 		case BUF_NORMAL:
-			buf->data=(double*)malloc(bufsize*sizeof(double));
+		case BUF_NORMAL_SAVED:
+			if(using_gpu)
+			{
+				buf->gpu_buf=p_clCreateBuffer(context, CL_MEM_READ_WRITE, bufsize*sizeof(float), 0, &error);
+				CL_CHECK(error);
+			}
+			else
+				buf->data=(double*)malloc(bufsize*sizeof(double));
+			++memusage;
 			break;
 		case BUF_PARAM:
 			buf->offset=nParams;
@@ -1020,17 +1391,29 @@ void parse_model(const char *filename, ModelHandle model)
 		}
 	}
 	ASSERT_MSG(nParams==nGrad, "%s: Different count of learnable params and gradient, nParams %d != nGrad %d", filename, nParams, nGrad);
-	ARRAY_ALLOC(double, model->params, 0, nParams, 0, 0);
-	ARRAY_ALLOC(double, model->grad, 0, nGrad, 0, 0);
-	ARRAY_ALLOC(double, model->adam_m, 0, nGrad, 0, 0);
-	ARRAY_ALLOC(double, model->adam_v, 0, nGrad, 0, 0);
+	model->nparams=nParams;
+	if(using_gpu)
+	{
+		model->gpu_params	=p_clCreateBuffer(context, CL_MEM_READ_WRITE, nParams*sizeof(float), 0, &error);	CL_CHECK(error);
+		model->gpu_grad		=p_clCreateBuffer(context, CL_MEM_READ_WRITE, nParams*sizeof(float), 0, &error);	CL_CHECK(error);
+		model->gpu_adam_m	=p_clCreateBuffer(context, CL_MEM_READ_WRITE, nParams*sizeof(float), 0, &error);	CL_CHECK(error);
+		model->gpu_adam_v	=p_clCreateBuffer(context, CL_MEM_READ_WRITE, nParams*sizeof(float), 0, &error);	CL_CHECK(error);
+	}
+	else
+	{
+		ARRAY_ALLOC(double, model->cpu_params, 0, nParams, 0, 0);
+		ARRAY_ALLOC(double, model->cpu_grad, 0, nGrad, 0, 0);
+		ARRAY_ALLOC(double, model->cpu_adam_m, 0, nGrad, 0, 0);
+		ARRAY_ALLOC(double, model->cpu_adam_v, 0, nGrad, 0, 0);
+	}
+	memusage+=4;
 
 	skip_ws(text, ctx);
 	if(!match_kw(text, ctx, (const char**)&kw_weights, 1))
 	{
 		for(size_t k=0;k<nParams;++k)
 		{
-			double *param=(double*)array_at(&model->params, k);
+			double *param=(double*)array_at(&model->cpu_params, k);
 			skip_ws(text, ctx);
 			parse_number(filename, text, ctx, 16, param);
 		}
@@ -1041,17 +1424,42 @@ void parse_model(const char *filename, ModelHandle model)
 	skip_ws(text, ctx);
 	ASSERT_MSG(*ctx==text->count, "%s(%d): Expected end of file", filename, ctx[1]);
 	ASSERT_MSG(model->instructions&&model->instructions->count, "Model has no instructions");
-
-	array_free(&variables);
+	ASSERT_MSG(model->input_shape[1]==3, "Only 3 input channels are currently supported");
+	
 	array_free(&text);
+
+	for(int kv=0;kv<(int)variables->count;++kv)
+	{
+		Variable *var=(Variable*)array_at(&variables, kv);
+		Buffer *buf=(Buffer*)array_at(&model->buffers, var->buffer);
+		ASSERT_MSG(buf->type==BUF_NORMAL||buf->type==BUF_NORMAL_SAVED, "Only normal data buffers can be saved (weights are saved anyway)");
+		buf->type=BUF_NORMAL_SAVED;
+	}
+#if 0
+	for(int ki=0;ki<(int)model->instructions->count;++ki)//X  the input is not a result
+	{
+		Instruction *inst=(Instruction*)array_at(&variables, ki);
+		for(int kv=0;kv<(int)variables->count;++kv)
+		{
+			Variable *var=(Variable*)array_at(&variables, kv);
+			if(var->buffer==inst->fwd_result)
+			{
+				inst->save_result=1;
+				break;
+			}
+		}
+	}
+#endif
+	array_free(&variables);
 
 	{
 		Instruction *inst=(Instruction*)array_at(&model->instructions, 0);
 		model->input=inst->fwd_args[0];
 	}
+	return memusage;
 }
 
-int print_hex(char *buf, size_t len, double x)
+int print_fhex(char *buf, size_t len, double x)
 {
 	int idx=0;
 
@@ -1112,7 +1520,7 @@ int print_hex(char *buf, size_t len, double x)
 	buf[idx]='\0';
 	return idx;
 }
-void save_model(ModelHandle model, int incremental, double loss)
+void save_model(Model* model, int incremental, double loss)
 {
 	const char defaultname[]="model.txt";
 	ArrayHandle filename, text;
@@ -1138,6 +1546,12 @@ void save_model(ModelHandle model, int incremental, double loss)
 	STR_APPEND(text, "\n", 1, 1);
 
 	size_t kp=0;
+	float *gpu_params=0;
+	if(using_gpu)
+	{
+		gpu_params=(float*)malloc(model->nparams*sizeof(float));
+		int error=p_clEnqueueReadBuffer(commandqueue, model->gpu_params, CL_TRUE, 0, model->nparams*sizeof(float), gpu_params, 0, 0, 0);	CL_CHECK(error);
+	}
 	for(int kb=0;kb<(int)model->buffers->count;++kb)
 	{
 		Buffer *buf=(Buffer*)array_at(&model->buffers, kb);
@@ -1149,12 +1563,29 @@ void save_model(ModelHandle model, int incremental, double loss)
 				{
 					for(int k2=0;k2<buf->shape[2];++k2)
 					{
-						for(int k3=0;k3<buf->shape[3];++k3, ++kp)
+						if(using_gpu)
 						{
-							double *val=(double*)array_at(&model->params, kp);
-							printed=print_hex(g_buf, G_BUF_SIZE, *val);
-							STR_APPEND(text, "\t", 1, 1);
-							STR_APPEND(text, g_buf, printed, 1);
+							for(int k3=0;k3<buf->shape[3];++k3, ++kp)
+							{
+#ifdef FIXED_PREC
+								double val=(double)gpu_params[kp]*(1./0x10000);
+#else
+								double val=gpu_params[kp];
+#endif
+								printed=print_fhex(g_buf, G_BUF_SIZE, val);
+								STR_APPEND(text, "\t", 1, 1);
+								STR_APPEND(text, g_buf, printed, 1);
+							}
+						}
+						else
+						{
+							for(int k3=0;k3<buf->shape[3];++k3, ++kp)
+							{
+								double *val=(double*)array_at(&model->cpu_params, kp);
+								printed=print_fhex(g_buf, G_BUF_SIZE, *val);
+								STR_APPEND(text, "\t", 1, 1);
+								STR_APPEND(text, g_buf, printed, 1);
+							}
 						}
 						STR_APPEND(text, "\n", 1, 1);
 					}
@@ -1168,19 +1599,21 @@ void save_model(ModelHandle model, int incremental, double loss)
 	//for(size_t k=0;k<model->params->count;++k)
 	//{
 	//	double *val=(double*)array_at(&model->params, k);
-	//	printed=print_hex(g_buf, G_BUF_SIZE, *val);
+	//	printed=print_fhex(g_buf, G_BUF_SIZE, *val);
 	//	STR_APPEND(text, "\n", 1, 1);
 	//	STR_APPEND(text, g_buf, printed, 1);
 	//}
+	if(using_gpu)
+		free(gpu_params);
 
 	save_text(filename->data, text->data, text->count);
 	array_free(&text);
 	array_free(&filename);
 }
 
-void crosscorrelation2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *bufb, Buffer *buf2, int enable_bias)
+void crosscorrelation2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *bufb, Buffer *buf2)
 {
-#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->params, BUFFER->offset):(double*)array_at(&model->grad, BUFFER->offset))
+#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL||BUFFER->type==BUF_NORMAL_SAVED?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->cpu_params, BUFFER->offset):(double*)array_at(&model->cpu_grad, BUFFER->offset))
 	double *data, *filt, *bias, *d2;
 	FETCH(data, bufx);
 	FETCH(filt, buff);
@@ -1195,8 +1628,7 @@ void crosscorrelation2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *bufb, 
 		buf2->shape[0], buf2->shape[1], buf2->shape[2], buf2->shape[3]);
 	ASSERT_MSG(bufx->shape[2]==buf2->shape[2]&&bufx->shape[3]==buf2->shape[3], "CC2D: Dimension mismatch %dx%d != %dx%d", bufx->shape[2], bufx->shape[3], buf2->shape[2], buf2->shape[3]);
 
-	size_t ires=bufx->shape[2]*bufx->shape[3],
-		isize=bufx->shape[1]*bufx->shape[2]*bufx->shape[3],
+	size_t ires=bufx->shape[2]*bufx->shape[3], isize=bufx->shape[1]*ires,
 		osize=buf2->shape[1]*buf2->shape[2]*buf2->shape[3],
 		K2=buff->shape[2]*buff->shape[3];
 	int ypad=buff->shape[2]>>1, xpad=buff->shape[3]>>1;
@@ -1205,12 +1637,12 @@ void crosscorrelation2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *bufb, 
 		double *outsample=d2+osize*kb;
 		for(int ko=0;ko<buf2->shape[1];++ko)//for each output channel
 		{
-			for(int ky=0;ky<buf2->shape[2];++ky)//for each row
+			for(int ky=0;ky<buf2->shape[2];++ky)//for output height
 			{
-				for(int kx=0;kx<buf2->shape[3];++kx, ++outsample)//for each pixel
+				for(int kx=0;kx<buf2->shape[3];++kx, ++outsample)//for output width
 				{
 					double *inchannel=data+isize*kb;
-					double sum=enable_bias?bias[ko]:0;
+					double sum=bias[ko];
 					for(int ki=0;ki<buff->shape[1];++ki, inchannel+=ires)//for each input channel
 					{
 						double *kernel=filt+K2*(buff->shape[1]*ko+ki);
@@ -1261,7 +1693,7 @@ void crosscorrelation2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *bufb, 
 }
 void dcrosscorrelation_dx_2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *buf2)//filter Cin & Cout are swapped, so filt shape = [Ci,Co,Ky,Kx]
 {
-#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->params, BUFFER->offset):(double*)array_at(&model->grad, BUFFER->offset))
+#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL||BUFFER->type==BUF_NORMAL_SAVED?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->cpu_params, BUFFER->offset):(double*)array_at(&model->cpu_grad, BUFFER->offset))
 	double *data, *filt, *d2;
 	FETCH(data, bufx);
 	FETCH(filt, buff);
@@ -1287,25 +1719,25 @@ void dcrosscorrelation_dx_2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *b
 		double *outsample=d2+osize*kb;
 		for(int ki=0;ki<buff->shape[1];++ki)//for each input channel
 		{
-			for(int ky=0;ky<buf2->shape[2];++ky)//for each row
+			for(int ky=0;ky<buf2->shape[2];++ky)//for input height
 			{
-				for(int kx=0;kx<buf2->shape[3];++kx, ++outsample)//for each pixel
+				for(int kx=0;kx<buf2->shape[3];++kx, ++outsample)//for input width
 				{
 					double *inchannel=data+isize*kb;
 					double sum=0;
 					for(int ko=0;ko<buff->shape[0];++ko, inchannel+=ires)//for each output channel
 					{
 						double *kernel=filt+K2*(buff->shape[1]*ko+ki);
-						for(int ky2=0;ky2<buff->shape[2];++ky2)//for each kernel row
+						for(int kky=0;kky<buff->shape[2];++kky)//for kernel height
 						{
-							unsigned yidx=ky+ky2-ypad;
+							unsigned yidx=ky+kky-ypad;
 							if((unsigned)yidx<(unsigned)buf2->shape[2])
 							{
-								for(int kx2=0;kx2<buff->shape[3];++kx2)//for each kernel value
+								for(int kkx=0;kkx<buff->shape[3];++kkx)//for kernel width
 								{
-									unsigned xidx=kx+kx2-xpad;
+									unsigned xidx=kx+kkx-xpad;
 									if((unsigned)xidx<(unsigned)buf2->shape[3])
-										sum+=kernel[buff->shape[3]*(buff->shape[2]-1-ky2)+buff->shape[3]-1-kx2]*inchannel[bufx->shape[3]*yidx+xidx];			//difference between crosscorrelation2d and conv2d
+										sum+=kernel[buff->shape[3]*(buff->shape[2]-1-kky)+buff->shape[3]-1-kkx]*inchannel[bufx->shape[3]*yidx+xidx];
 								}
 							}
 						}
@@ -1318,18 +1750,6 @@ void dcrosscorrelation_dx_2d(Model *model, Buffer *bufx, Buffer *buff, Buffer *b
 	//temp=buff->shape[0];//X
 	//buff->shape[0]=buff->shape[1];
 	//buff->shape[1]=temp;
-}
-void quantizer_train_fwd(Model *model, Instruction *inst)
-{
-	Buffer
-		*src=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
-		*dst=(Buffer*)array_at(&model->buffers, inst->fwd_result);
-	ASSERT_MSG(src->type==BUF_NORMAL, "Quantizer cannot be applied to learnable parameters, src->type = %d", src->type);
-	ASSERT_MSG(dst->type==BUF_NORMAL, "Quantizer cannot be applied to learnable parameters, src->type = %d", dst->type);
-	int size=src->shape[0]*src->shape[1]*src->shape[2]*src->shape[3];
-	double gain=1./((double)(inst->info[0]-1)*RAND_MAX);
-	for(size_t k=0;k<size;++k)
-		dst->data[k]=src->data[k]+gain*(rand()-(RAND_MAX>>1));
 }
 //double dotsh2d(const double *fixed, const double *shifted, int Hf, int Wf, int Hs, int Ws, int dy, int dx)
 //{
@@ -1351,7 +1771,7 @@ void quantizer_train_fwd(Model *model, Instruction *inst)
 //}
 void dcrosscorrelation_dfilt_2d(Model *model, Buffer *buf_dL_dnet, Buffer *buf_x, Buffer *buf_dL_dfilt, int xpad, int ypad)
 {
-#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->params, BUFFER->offset):(double*)array_at(&model->grad, BUFFER->offset))
+#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL||BUFFER->type==BUF_NORMAL_SAVED?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->cpu_params, BUFFER->offset):(double*)array_at(&model->cpu_grad, BUFFER->offset))
 	double *dL_dnet, *x, *dL_dfilt;
 	FETCH(dL_dnet, buf_dL_dnet);
 	FETCH(x, buf_x);
@@ -1375,12 +1795,12 @@ void dcrosscorrelation_dfilt_2d(Model *model, Buffer *buf_dL_dnet, Buffer *buf_x
 					for(int kkx=0;kkx<buf_dL_dfilt->shape[3];++kkx, ++kernel)//for kernel width
 					{
 						double sum=0;
-						for(int ky=0;ky<buf_dL_dnet->shape[2];++ky)
+						for(int ky=0;ky<buf_dL_dnet->shape[2];++ky)//for output height
 						{
 							int ky2=ky+kky-ypad;
 							if((unsigned)ky2<(unsigned)buf_x->shape[2])
 							{
-								for(int kx=0;kx<buf_dL_dnet->shape[3];++kx)
+								for(int kx=0;kx<buf_dL_dnet->shape[3];++kx)//for output width
 								{
 									int kx2=kx+kkx-xpad;
 									if((unsigned)kx2<(unsigned)buf_x->shape[3])
@@ -1398,12 +1818,12 @@ void dcrosscorrelation_dfilt_2d(Model *model, Buffer *buf_dL_dnet, Buffer *buf_x
 }
 void dcrosscorrelation_dbias_2d(Model *model, Buffer *buf_dL_dnet, Buffer *buf_dL_dbias)
 {
-#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->params, BUFFER->offset):(double*)array_at(&model->grad, BUFFER->offset))
+#define FETCH(PTR, BUFFER)	PTR=BUFFER->type==BUF_NORMAL||BUFFER->type==BUF_NORMAL_SAVED?BUFFER->data:(BUFFER->type==BUF_PARAM?(double*)array_at(&model->cpu_params, BUFFER->offset):(double*)array_at(&model->cpu_grad, BUFFER->offset))
 	double *dL_dnet, *dL_dbias;
 	FETCH(dL_dnet, buf_dL_dnet);
 	FETCH(dL_dbias, buf_dL_dbias);
 #undef	FETCH
-	//the sum is over [B, -, W, H]
+	//the sum is over [B, -, Ho, Wo]
 	for(int kc=0;kc<buf_dL_dnet->shape[1];++kc)
 	{
 		dL_dbias[kc]=0;
@@ -1439,7 +1859,7 @@ unsigned char *load_nextimage(const char *path, ArrayHandle filenames, int *ki, 
 			loaded=1;
 			break;
 		}
-		*warp|=ki2+1>=(int)filenames->count;
+		*warp+=ki2+1>=(int)filenames->count;
 		ki2=(ki2+1)%(int)filenames->count;
 		if(ki2==*ki)
 			break;
@@ -1447,35 +1867,57 @@ unsigned char *load_nextimage(const char *path, ArrayHandle filenames, int *ki, 
 	ASSERT_MSG(loaded, "No images found in \'%s\'", path);
 	return image;
 }
-void assign_sample(const unsigned char *image, int iw, int ih, int px, int py, Buffer *input, int kb)//1:1
+void assign_sample(const unsigned char *image, int iw, int ih, int px, int py, int kb, Buffer *input, float *gpubuf)//1:1
 {
 	double gain=1./255;
 	for(int kc=0;kc<input->shape[1];++kc)//for each input channel
 	{
 		for(int ky=0;ky<input->shape[2];++ky)
 		{
-			double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
-			int ky2=ky+py;
-			if((unsigned)ky2<(unsigned)ih)
+			if(gpubuf)
 			{
-				for(int kx=0;kx<input->shape[3];++kx)
+				float *frow=gpubuf+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+				int ky2=ky+py;
+				if((unsigned)ky2<(unsigned)ih)
 				{
-					int kx2=kx+px;
-					if((unsigned)kx2<(unsigned)ih)
-						dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
+					for(int kx=0;kx<input->shape[3];++kx)
+					{
+						int kx2=kx+px;
+						if((unsigned)kx2<(unsigned)ih)
+							frow[kx]=(float)(image[(iw*ky2+kx2)<<2|kc]*gain);
+					}
+				}
+			}
+			else
+			{
+				double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+				int ky2=ky+py;
+				if((unsigned)ky2<(unsigned)ih)
+				{
+					for(int kx=0;kx<input->shape[3];++kx)
+					{
+						int kx2=kx+px;
+						if((unsigned)kx2<(unsigned)ih)
+							dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
+					}
 				}
 			}
 		}
 	}
 }
-int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Model *model)
+int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Model *model)//returns number of times the whole dataset was read
 {
 	static unsigned char *image=0;
 	static int ki0=-1, iw=0, ih=0;
 	
 	int warp=0;
 	Buffer *input=(Buffer*)array_at(&model->buffers, model->input);
-	memset(input->data, 0, input->shape[0]*input->shape[1]*input->shape[2]*input->shape[3]*sizeof(double));
+	size_t isize=input->shape[0]*input->shape[1]*input->shape[2]*input->shape[3];
+	int error;
+	if(using_gpu)
+		memset(model->gpu_input, 0, isize*sizeof(float));
+	else
+		memset(input->data, 0, isize*sizeof(double));
 	switch(model->aug)
 	{
 	case AUG_BLOCK://partition image to blocks
@@ -1494,7 +1936,7 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 			{
 				if(*kblock==nblocks)
 				{
-					warp|=*ki+1>=(int)filenames->count;
+					warp+=*ki+1>=(int)filenames->count;
 					*ki=(*ki+1)%(int)filenames->count;
 					free(image);
 					image=load_nextimage(path, filenames, ki, &iw, &ih, &warp);
@@ -1502,7 +1944,7 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 				}
 				int px=(*kblock%bcx)*input->shape[3],
 					py=(*kblock/bcx)*input->shape[2];
-				assign_sample(image, iw, ih, px, py, input, kb);
+				assign_sample(image, iw, ih, px, py, kb, input, using_gpu?model->gpu_input:0);
 			}
 		}
 		break;
@@ -1511,13 +1953,13 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 		{
 			free(image);
 			image=load_nextimage(path, filenames, ki, &iw, &ih, &warp);
-			warp|=*ki+1>=(int)filenames->count;
+			warp+=*ki+1>=(int)filenames->count;
 			*ki=(*ki+1)%(int)filenames->count;
 			ki0=*ki, *kblock=0;
 
 			int px=iw<=input->shape[3]?0:rand()%(iw-input->shape[3]),
 				py=ih<=input->shape[2]?0:rand()%(ih-input->shape[2]);
-			assign_sample(image, iw, ih, px, py, input, kb);
+			assign_sample(image, iw, ih, px, py, kb, input, using_gpu?model->gpu_input:0);
 		}
 		break;
 	case AUG_STRETCH://stretch image (smaller or larger dimensions), nearest for now
@@ -1527,7 +1969,7 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 			{
 				free(image);
 				image=load_nextimage(path, filenames, ki, &iw, &ih, &warp);
-				warp|=*ki+1>=(int)filenames->count;
+				warp+=*ki+1>=(int)filenames->count;
 				*ki=(*ki+1)%(int)filenames->count;
 				ki0=*ki, *kblock=0;
 
@@ -1535,12 +1977,25 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 				{
 					for(int ky=0;ky<input->shape[2];++ky)
 					{
-						double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
-						int ky2=ky*(ih-1)/(input->shape[2]-1);
-						for(int kx=0;kx<input->shape[3];++kx)
+						if(using_gpu)
 						{
-							int kx2=kx*(iw-1)/(input->shape[3]-1);
-							dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
+							float *frow=model->gpu_input+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+							int ky2=ky*(ih-1)/(input->shape[2]-1);
+							for(int kx=0;kx<input->shape[3];++kx)
+							{
+								int kx2=kx*(iw-1)/(input->shape[3]-1);
+								frow[kx]=(float)(image[(iw*ky2+kx2)<<2|kc]*gain);
+							}
+						}
+						else
+						{
+							double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+							int ky2=ky*(ih-1)/(input->shape[2]-1);
+							for(int kx=0;kx<input->shape[3];++kx)
+							{
+								int kx2=kx*(iw-1)/(input->shape[3]-1);
+								dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
+							}
 						}
 					}
 				}
@@ -1548,12 +2003,493 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 		}
 		break;
 	}
+	if(using_gpu)
+	{
+#ifdef FIXED_PREC
+		for(int k=0;k<isize;++k)
+		{
+			float *val=model->gpu_input+k;
+			*(int*)val=*val*0x10000;
+		}
+#endif
+		error=p_clEnqueueWriteBuffer(commandqueue, input->gpu_buf, CL_TRUE, 0, isize*sizeof(float), model->gpu_input, 0, 0, 0);
+		CL_CHECK(error);
+	}
 	return warp;
 }
 
+typedef struct ConvInfoStruct//68 bytes
+{	//	0	1	2	3	4	5	6	7		8		9			10			11	12	13		14		15		16
+	int B,	Ci,	Hi,	Wi,	Co,	Kh,	Kw, xpad,	ypad,	xstride,	ystride,	Ho,	Wo, weight, bias,	epoch,	qlevels;//TODO support stride
+} ConvInfo;
+typedef struct AdamInfoStruct
+{
+	float lr, beta1, beta2, epsilon, gain1, gain2;//gain[i] = 1/(1-pow(beta[i], epoch))
+} AdamInfo;
+void fill_indices(Model *model, int ki, int ke, int qlevels, ConvInfo *cpu_indices, cl_mem gpu_indices)
+{
+	Instruction *inst=(Instruction*)array_at(&model->instructions, ki);
+	Buffer
+		*bufin	=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+		*buffilt=(Buffer*)array_at(&model->buffers, inst->fwd_args[1]),
+		*bufbias=(Buffer*)array_at(&model->buffers, inst->fwd_args[2]),
+		*bufnet	=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+	cpu_indices->B		=bufin->shape[0];
+	cpu_indices->Ci		=bufin->shape[1];
+	cpu_indices->Hi		=bufin->shape[2];
+	cpu_indices->Wi		=bufin->shape[3];
+	cpu_indices->Co		=buffilt->shape[0];
+	cpu_indices->Kh		=buffilt->shape[2];
+	cpu_indices->Kw		=buffilt->shape[3];
+	cpu_indices->xpad	=inst->info[0];
+	cpu_indices->ypad	=inst->info[1];
+	cpu_indices->xstride=inst->info[2];
+	cpu_indices->ystride=inst->info[3];
+	cpu_indices->Ho		=bufnet->shape[2];
+	cpu_indices->Wo		=bufnet->shape[3];
+	cpu_indices->weight	=(int)buffilt->offset;
+	cpu_indices->bias	=(int)bufbias->offset;
+	cpu_indices->epoch	=ke;
+	cpu_indices->qlevels=qlevels;
+	int error=p_clEnqueueWriteBuffer(commandqueue, gpu_indices, CL_TRUE, 0, sizeof(*cpu_indices), cpu_indices, 0, 0, 0);
+	CL_CHECK(error);
+}
+
+typedef struct ResultCtxStruct
+{
+	int *rgb,
+		nsaves,
+		bcountx, bcounty,
+		bsizex, bsizey,
+		size;
+} ResultCtx;
+void result_save(ResultCtx *res, double loss, int idx)
+{
+	time_t rawtime;
+	struct tm *info;
+	time(&rawtime);
+	info=localtime(&rawtime);
+	if(idx)
+		sprintf_s(g_buf, G_BUF_SIZE, "%04d%02d%02d-%02d%02d%02d-%d.PNG", 1900+info->tm_year, 1+info->tm_mon, info->tm_mday, info->tm_hour, info->tm_min, info->tm_sec, idx);
+	else
+		sprintf_s(g_buf, G_BUF_SIZE, "%04d%02d%02d-%02d%02d%02d-RMSE%lf.PNG", 1900+info->tm_year, 1+info->tm_mon, info->tm_mday, info->tm_hour, info->tm_min, info->tm_sec, loss);
+	lodepng_encode_file(g_buf, res->rgb, res->nsaves*res->bcountx*res->bsizex, res->bcounty*res->bsizey, LCT_RGBA, 8);
+}
+int result_add(ResultCtx *res, Buffer *buf, int idx, int using_gpu, int force_save_loss)
+{
+	if(buf->type!=BUF_NORMAL_SAVED&&!force_save_loss)
+		return 0;
+
+	ASSERT_MSG(res->bcountx*res->bcounty>=buf->shape[0],
+		"result_add: Batch size mismatch: expected B <= %d, got %d",
+		res->bcountx*res->bcounty, buf->shape[0]);
+
+	ASSERT_MSG(res->bsizex==buf->shape[3]&&res->bsizey==buf->shape[2]&&buf->shape[1]==3,
+		"result_add: Buffer has wrong size: expected [3 %d %d], got [%d %d %d]",
+		res->bsizey, res->bsizex, buf->shape[1], buf->shape[2], buf->shape[3]);
+
+	int iw=res->nsaves*res->bcountx*res->bsizex;
+	float *gpubuf=0;
+	size_t size=0;
+	if(using_gpu)
+	{
+		size=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
+		gpubuf=(float*)malloc(size*sizeof(float));
+		int error=p_clEnqueueReadBuffer(commandqueue, buf->gpu_buf, CL_TRUE, 0, size*sizeof(float), gpubuf, 0, 0, 0);	CL_CHECK(error);
+	}
+	for(int kb=0, ksrc=0;kb<buf->shape[0];++kb)//for each sample in batch
+	{
+		int kbx=kb%res->bcountx, kby=kb/res->bcountx;
+		int *dst=res->rgb+iw*res->bsizey*kby+res->bsizex*(res->nsaves*kbx+idx);
+		for(int kc=0;kc<buf->shape[1];++kc)//for each chanel
+		{
+			for(int ky=0;ky<buf->shape[2];++ky)//for src height
+			{
+				if(using_gpu)
+				{
+					for(int kx=0;kx<buf->shape[3];++kx, ++ksrc)//for src width
+					{
+						unsigned char *p=(unsigned char*)(dst+iw*ky+kx);
+#ifdef FIXED_PREC
+						int val=255*((int*)gpubuf)[ksrc]>>16;
+						if(force_save_loss)
+							val=(int)(127.5*0x10000)-val;
+#else
+						float val=255*gpubuf[ksrc];
+						if(force_save_loss)
+							val=127.5f-val;
+#endif
+						if(val<0)
+							val=0;
+						if(val>255)
+							val=255;
+						p[kc]=(unsigned char)val;
+						//printf("%02X ", p[kc]);//
+					}
+				}
+				else
+				{
+					for(int kx=0;kx<buf->shape[3];++kx, ++ksrc)//for src width
+					{
+						unsigned char *p=(unsigned char*)(dst+iw*ky+kx);
+						double val=255*buf->data[ksrc];
+						if(force_save_loss)
+							val=127.5-val;
+						if(val<0)
+							val=0;
+						if(val>255)
+							val=255;
+						p[kc]=(unsigned char)val;
+					}
+				}
+			}
+		}
+	}
+	if(using_gpu)
+		free(gpubuf);
+#if 0
+	result_save(res, 0, 1+idx);//
+#endif
+	return 1;
+}
+
+double forward_gpu(Model *model, int is_test, int ke, int qlevels, ConvInfo *cpu_indices, cl_mem gpu_indices, ResultCtx *result)
+{
+	int error;
+	cl_kernel kernel;
+	size_t osize;
+	double loss;
+	int saveidx=0;
+	Instruction *inst;
+
+	if(is_test)
+	{
+		inst=(Instruction*)array_at(&model->instructions, 0);
+		Buffer *input=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]);
+		saveidx+=result_add(result, input, saveidx, 1, 0);
+	}
+	for(int ki=0;ki<(int)model->instructions->count;++ki)		//GPU forward
+	{
+		inst=(Instruction*)array_at(&model->instructions, ki);
+		switch(inst->op)
+		{
+		case OP_CC2:
+			{
+				Buffer
+					*bufin	=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+					*buffilt=(Buffer*)array_at(&model->buffers, inst->fwd_args[1]),
+					*bufbias=(Buffer*)array_at(&model->buffers, inst->fwd_args[2]),
+					*bufnet	=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+
+				fill_indices(model, ki, ke, qlevels, cpu_indices, gpu_indices);
+
+				kernel=kernels[OCL_cc2d];
+				osize=bufnet->shape[0]*bufnet->shape[1]*bufnet->shape[2]*bufnet->shape[3];
+				error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);		CL_CHECK(error);
+				error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufin->gpu_buf);		CL_CHECK(error);
+				error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &model->gpu_params);	CL_CHECK(error);
+				error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &bufnet->gpu_buf);	CL_CHECK(error);
+				error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
+				p_clFlush(commandqueue);
+				p_clFinish(commandqueue);
+
+				if(is_test)
+					saveidx+=result_add(result, bufnet, saveidx, 1, 0);
+
+				//preview_cl_buffer(bufin, 0, 0, 0);
+				//preview_cl_buffer(buffilt, model->gpu_params, cpu_indices.weight, 0);
+				//preview_cl_buffer(buffilt, model->gpu_params, cpu_indices.bias, 0);
+				//preview_cl_buffer(bufnet, 0, 0, 0);
+#if 0
+				{
+					float *buffer=(float*)malloc(osize*sizeof(float));
+					error=p_clEnqueueReadBuffer(commandqueue, bufnet->gpu_buf, CL_TRUE, 0, osize, buffer, 0, 0, 0);	CL_CHECK(error);
+					if(osize>200)
+						osize=200;
+					for(size_t k=0;k<osize;++k)
+					{
+						printf("%g ", (double)buffer[k]);
+						if(!isfinite(buffer[k]))
+						{
+							int k2, kb, kc, ky, kx;
+							k2=k;
+							kx=k2%bufnet->shape[3], k2/=bufnet->shape[3];
+							ky=k2%bufnet->shape[2], k2/=bufnet->shape[2];
+							kc=k2%bufnet->shape[1], k2/=bufnet->shape[1];
+							kb=k2;
+							printf("%d [%d %d %d %d] %016llX = %f\n", k, kb, kc, ky, kx, buffer[k], buffer[k]);
+							LOG_ERROR("");
+						}
+					}
+					printf("\n");
+				}
+#endif
+			}
+			break;
+		case OP_CONV2:
+			LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
+			break;
+		case OP_LRELU:
+		case OP_RELU:
+		case OP_QUANTIZER:
+			{
+				Buffer
+					*bufin	=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+					*bufout	=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+				osize=bufout->shape[0]*bufout->shape[1]*bufout->shape[2]*bufout->shape[3];
+				kernel=0;
+				switch(inst->op)
+				{
+				case OP_LRELU:		kernel=kernels[OCL_lrelu	];break;
+				case OP_RELU:		kernel=kernels[OCL_relu		];break;
+				case OP_QUANTIZER:	kernel=kernels[is_test?OCL_quantizer_test:OCL_quantizer_train];break;
+				}
+				error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);		CL_CHECK(error);
+				error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufin->gpu_buf);		CL_CHECK(error);
+				error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &bufout->gpu_buf);	CL_CHECK(error);
+				error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
+				p_clFlush(commandqueue);
+				p_clFinish(commandqueue);
+
+				if(is_test)
+					saveidx+=result_add(result, bufout, saveidx, 1, 0);
+			}
+			break;
+		case OP_MSE:
+			{
+				Buffer
+					*buf1	=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+					*buf2	=(Buffer*)array_at(&model->buffers, inst->fwd_args[1]),
+					*bufdiff=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+
+				kernel=kernels[OCL_loss_MSE];
+				osize=bufdiff->shape[0]*bufdiff->shape[1]*bufdiff->shape[2]*bufdiff->shape[3];
+				error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);		CL_CHECK(error);
+				error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &buf1->gpu_buf);		CL_CHECK(error);
+				error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &buf2->gpu_buf);		CL_CHECK(error);
+				error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &bufdiff->gpu_buf);	CL_CHECK(error);
+				error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
+				p_clFlush(commandqueue);
+				p_clFinish(commandqueue);
+
+				if(is_test)
+					saveidx+=result_add(result, bufdiff, saveidx, 1, 1);
+
+				error=p_clEnqueueReadBuffer(commandqueue, bufdiff->gpu_buf, CL_TRUE, 0, osize*sizeof(float), model->gpu_output, 0, 0, 0);	CL_CHECK(error);
+				double maxloss=0;
+				size_t maxidx=0;
+				loss=0;
+				for(size_t k=0;k<osize;++k)
+				{
+#ifdef FIXED_PREC
+					double lk=((int*)model->gpu_output)[k]*(1./0x10000);
+#else
+					double lk=model->gpu_output[k];
+#endif
+					double l2=(double)lk*lk;
+					//if(!isfinite(l2))
+					//	LOG_ERROR("Infinite loss at epoch %d, at %lld, size %llf\n0x%016llX = %g\n", ke, k, osize, lk, (double)model->gpu_output[k]);
+					if(maxloss<l2)
+						maxloss=l2, maxidx=k;
+					loss+=l2;
+				}
+				ASSERT_MSG(isfinite(loss), "\nInfinite loss at epoch %d, idx %lld, size=%lld\n0x%016llX = %g\n", ke, maxidx, osize, maxloss, maxloss);
+				loss/=osize<<1;
+			}
+			break;
+		case OP_MS_SSIM:
+			LOG_ERROR("MS-SSIM is not supported yet. Use MSE.");
+			break;
+		default:
+			LOG_ERROR("Unrecognized instruction type %d.", inst->op);
+			break;
+		}
+	}
+	return loss;
+}
+double forward_cpu(Model *model, int is_test, ResultCtx *result)
+{
+	double loss;
+	int saveidx=0;
+	Instruction *inst;
+
+	//CPU forward
+	if(is_test)
+	{
+		inst=(Instruction*)array_at(&model->instructions, 0);
+		Buffer *input=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]);
+		saveidx+=result_add(result, input, saveidx, 1, 0);
+	}
+	for(int ki=0;ki<(int)model->instructions->count;++ki)
+	{
+		inst=(Instruction*)array_at(&model->instructions, ki);
+#ifdef DEBUG_AUTOGRAD
+		const char *a=0;
+		switch(inst->op)
+		{
+		case OP_CC2			:a="OP_CC2      ";break;
+		case OP_CONV2		:a="OP_CONV2    ";break;
+		case OP_RELU		:a="OP_RELU     ";break;
+		case OP_LRELU		:a="OP_LRELU    ";break;
+		case OP_QUANTIZER	:a="OP_QUANTIZER";break;
+		case OP_MSE			:a="OP_MSE      ";break;
+		case OP_MS_SSIM		:a="OP_MS_SSIM  ";break;
+		}
+		printf("fwd %d/%d %s\n", ki+1, (int)model->instructions->count, a);//
+#endif
+		switch(inst->op)
+		{
+		case OP_CC2:
+			{
+				Buffer
+					*bufx=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+					*buff=(Buffer*)array_at(&model->buffers, inst->fwd_args[1]),
+					*bufb=(Buffer*)array_at(&model->buffers, inst->fwd_args[2]),
+					*bufn=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+//#ifdef DEBUG_AUTOGRAD
+//					printf("fwd %d %d %d result %d, out shape [%d %d %d %d]\n",
+//						inst->fwd_args[0], inst->fwd_args[1], inst->fwd_args[2], inst->fwd_result,
+//						bufn->shape[0], bufn->shape[1], bufn->shape[2], bufn->shape[3]);//
+//#endif
+				crosscorrelation2d(model, bufx, buff, bufb, bufn);
+
+				if(is_test)
+					saveidx+=result_add(result, bufn, saveidx, 0, 0);
+#if 0
+				{
+					for(size_t k=0, osize=bufn->shape[0]*bufn->shape[1]*bufn->shape[2]*bufn->shape[3];k<osize;++k)
+					{
+						float val=bufn->data[k];
+						if(!isfinite(val)||val!=val)
+						{
+							int k0, kb, kc, ky, kx;
+							k0=(int)k;
+							kx=k%bufn->shape[3], k/=bufn->shape[3];
+							ky=k%bufn->shape[2], k/=bufn->shape[2];
+							kc=k%bufn->shape[1], k/=bufn->shape[1];
+							kb=(int)k;
+							printf("%d [%d %d %d %d] %f\n", k0, kb, kc, ky, kx, bufn->data[k]);
+							break;
+						}
+					}
+				}
+#endif
+			}
+			continue;
+		case OP_CONV2:
+			LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
+			//{
+			//	Buffer
+			//		*bufx=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+			//		*buff=(Buffer*)array_at(&model->buffers, inst->fwd_args[1]),
+			//		*bufb=(Buffer*)array_at(&model->buffers, inst->fwd_args[2]),
+			//		*buf2=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+			//	conv2d(model, bufx, buff, bufb, buf2, 1);
+			//}
+			continue;
+		case OP_LRELU:
+			{
+				Buffer
+					*src=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+					*dst=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+				ASSERT_MSG(src->type==BUF_NORMAL||src->type==BUF_NORMAL_SAVED, "LReLU cannot be applied to learnable parameters, src->type = %d", src->type);
+				ASSERT_MSG(dst->type==BUF_NORMAL||dst->type==BUF_NORMAL_SAVED, "LReLU cannot be applied to learnable parameters, src->type = %d", dst->type);
+				LeakyReLU(src->data, dst->data, src->shape[0]*src->shape[1]*src->shape[2]*src->shape[3]);
+			}
+			continue;
+		case OP_RELU:
+			{
+				Buffer
+					*src=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+					*dst=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+				ASSERT_MSG(src->type==BUF_NORMAL||src->type==BUF_NORMAL_SAVED, "ReLU cannot be applied to learnable parameters, src->type = %d", src->type);
+				ASSERT_MSG(dst->type==BUF_NORMAL||dst->type==BUF_NORMAL_SAVED, "ReLU cannot be applied to learnable parameters, src->type = %d", dst->type);
+				ReLU(src->data, dst->data, src->shape[0]*src->shape[1]*src->shape[2]*src->shape[3]);
+			}
+			continue;
+		case OP_QUANTIZER:
+			{
+				Buffer
+					*src=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+					*dst=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+				ASSERT_MSG(src->type==BUF_NORMAL||src->type==BUF_NORMAL_SAVED, "Quantizer cannot be applied to learnable parameters, src->type = %d", src->type);
+				ASSERT_MSG(dst->type==BUF_NORMAL||dst->type==BUF_NORMAL_SAVED, "Quantizer cannot be applied to learnable parameters, src->type = %d", dst->type);
+				int size=src->shape[0]*src->shape[1]*src->shape[2]*src->shape[3];
+				if(is_test)
+				{
+					double gain=1./(inst->info[0]-1);
+					for(size_t k=0;k<size;++k)
+					{
+						double x=(inst->info[0]-1)*src->data[k];
+						x=round(x);
+						if(x<0)
+							x=0;
+						if(x>inst->info[0]-1)
+							x=inst->info[0]-1;
+						x*=gain;
+						dst->data[k]=x;
+					}
+					saveidx+=result_add(result, dst, saveidx, 0, 0);
+				}
+				else
+				{
+					double gain=1./((double)(inst->info[0]-1)*RAND_MAX);
+					for(size_t k=0;k<size;++k)
+						dst->data[k]=src->data[k]+gain*(rand()-(RAND_MAX>>1));
+				}
+			}
+			continue;
+		case OP_MSE:
+			{
+				Buffer
+					*s1=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]),
+					*s2=(Buffer*)array_at(&model->buffers, inst->fwd_args[1]),
+					*dst=(Buffer*)array_at(&model->buffers, inst->fwd_result);
+				ASSERT_MSG(s1->type==BUF_NORMAL||s1->type==BUF_NORMAL_SAVED, "MSE cannot be applied to learnable parameters, src->type = %d", s1->type);
+				ASSERT_MSG(s2->type==BUF_NORMAL||s2->type==BUF_NORMAL_SAVED, "MSE cannot be applied to learnable parameters, src->type = %d", s2->type);
+				ASSERT_MSG(dst->type==BUF_NORMAL||dst->type==BUF_NORMAL_SAVED, "MSE cannot be applied to learnable parameters, src->type = %d", dst->type);
+				size_t count=s1->shape[0]*s1->shape[1]*s1->shape[2]*s1->shape[3];
+				loss=0;
+				for(size_t k=0;k<count;++k)
+				{
+					dst->data[k]=s1->data[k]-s2->data[k];
+					loss+=dst->data[k]*dst->data[k];
+				}
+				loss/=count<<1;
+
+				if(is_test)
+					saveidx+=result_add(result, dst, saveidx, 0, 1);
+			}
+			break;
+		case OP_MS_SSIM:
+			LOG_ERROR("MS-SSIM is not supported yet. Use MSE.");
+			break;
+		default:
+			LOG_ERROR("Unrecognized instruction type %d.", inst->op);
+			break;
+		}
+		break;
+	}
+	return loss;
+}
+
 Model model={0};
+ConvInfo cpu_indices={0};
+AdamInfo adam_params={0};
 #endif
 
+typedef enum CMDArgsEnum
+{
+	ARG_PROGRAM,
+
+	ARG_DEVICE,
+	ARG_EPOCHS,
+	ARG_LR,
+	ARG_BATCHSIZE,
+	ARG_MODEL,
+
+	ARG_COUNT,
+} CMDArgs;
 int main(int argc, char **argv)
 {
 	set_console_buffer_size(120, 2000);
@@ -1563,11 +2499,13 @@ int main(int argc, char **argv)
 #if 1
 	printf(
 		"ACME-ML\t\tbuild %s %s\n", __DATE__, __TIME__);
-	if(argc<5||argc>6)
+	if(argc!=ARG_COUNT-1&&argc!=ARG_COUNT)
 	{
 		printf(
 			"Usage:\n"
-			"  program  datasetPath  epochCount  learningRate  batchSize  [modelName.txt]\n"
+			"  program  device  epochs  LR  batchSize  [modelName.txt]\n"
+			"\n"
+			"device: GPU or CPU\n"
 			"If model name is not given, will attempt to load the incremental \'model.txt\'\n"
 			"\n"
 		);
@@ -1576,37 +2514,143 @@ int main(int argc, char **argv)
 #endif
 		return 1;
 	}
-	int epoch=atoi(argv[2]);
-	double lr=atof(argv[3]);
-	model.input_shape[0]=atoi(argv[4]);//Batch size
-	parse_model(argc==5?"model.txt":argv[5], &model);
-
-	ASSERT_MSG(model.input_shape[1]==3, "Only 3 input channels are currently supported");
-
-#ifdef DEBUG_SAVER
-	save_model(&model, 1, 0);//
+	int error;
+	if(!strcmp(argv[ARG_DEVICE], "GPU"))
+	{
+		using_gpu=1;
+		ocl_init("cl_kernels.h");
+	}
+	else if(strcmp(argv[ARG_DEVICE], "CPU"))//not CPU
+	{
+		printf("Invalid device name \'%s\', expected GPU or CPU", argv[ARG_DEVICE]);
+#ifdef _MSC_VER
+		pause();
 #endif
+		return 1;
+	}
+
+	//cc test
+#if 0
+	{
+		ConvInfo indices=
+		{
+			1,
+			1, 4, 4,//Ci,Hi,Wi
+			1, 3, 3,//Co,Kh,Kw
+			1, 1, 1, 1,//pad, stride
+			4, 4,//Ho,Wo
+			0, 9,//params
+			0, 10,
+		};
+		size_t osize=indices.Wo*indices.Ho;
+		float input[]=
+		{
+			1, 1, 0, 0,
+			1, 1, 0, 0,
+			0, 0, 1, 1,
+			0, 0, 1, 1,
+		};
+		float params[]=
+		{
+			1.f/9, 1.f/9, 1.f/9,
+			1.f/9, 1.f/9, 1.f/9,
+			1.f/9, 1.f/9, 1.f/9,
+			0,
+		};
+		float output[16];
+		cl_mem gpu_indices, gpu_input, gpu_params, gpu_output;
+		gpu_indices	=p_clCreateBuffer(context, CL_MEM_READ_ONLY, sizeof(indices), 0, &error);	CL_CHECK(error);
+		gpu_input	=p_clCreateBuffer(context, CL_MEM_READ_ONLY, sizeof(input), 0, &error);		CL_CHECK(error);
+		gpu_params	=p_clCreateBuffer(context, CL_MEM_READ_ONLY, sizeof(params), 0, &error);	CL_CHECK(error);
+		gpu_output	=p_clCreateBuffer(context, CL_MEM_READ_ONLY, sizeof(output), 0, &error);	CL_CHECK(error);
+		error=p_clEnqueueWriteBuffer(commandqueue, gpu_indices, CL_TRUE, 0, sizeof(indices), &indices, 0, 0, 0);CL_CHECK(error);
+		error=p_clEnqueueWriteBuffer(commandqueue, gpu_input	, CL_TRUE, 0, sizeof(input), input, 0, 0, 0);	CL_CHECK(error);
+		error=p_clEnqueueWriteBuffer(commandqueue, gpu_params	, CL_TRUE, 0, sizeof(params), params, 0, 0, 0);	CL_CHECK(error);
+		cl_kernel kernel=kernels[OCL_cc2d];
+		error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);CL_CHECK(error);
+		error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &gpu_input);	CL_CHECK(error);
+		error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &gpu_params);	CL_CHECK(error);
+		error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &gpu_output);	CL_CHECK(error);
+		error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
+		error=p_clFlush(commandqueue);	CL_CHECK(error);
+		error=p_clFinish(commandqueue);	CL_CHECK(error);
+		error=p_clEnqueueReadBuffer(commandqueue, gpu_output, CL_TRUE, 0, sizeof(output), output, 0, 0, 0);	CL_CHECK(error);
+		print_2d(output, indices.Ho, indices.Wo, 0, "Output:");
+		pause();
+		exit(0);
+	}
+#endif
+	int epoch=atoi(argv[ARG_EPOCHS]);
+	double lr=atof(argv[ARG_LR]);
+	model.input_shape[0]=atoi(argv[ARG_BATCHSIZE]);//Batch size
+	int nallocs=(int)parse_model(argc==ARG_MODEL?"model.txt":argv[ARG_MODEL], &model);
+
+	//for(int k=0;k<model.buffers->count;++k)
+	//{
+	//	Buffer *buf=(Buffer*)array_at(&model.buffers, k);
+	//	printf("\t%p\n", buf->offset);
+	//}
+	int nlayers=0;
+	for(int ki=0;ki<(int)model.instructions->count;++ki)
+	{
+		Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+		nlayers+=inst->op==OP_CC2||inst->op==OP_CONV2;
+	}
+
+	printf("%d buffers\n%lld parameters, %d layers\n%d epochs, lr=%g, batchSize=%d\n", nallocs, model.nparams, nlayers, epoch, lr, model.input_shape[0]);
 
 	//read dataset directory
-	ArrayHandle dspath=filter_path(argv[1]);
-	ArrayHandle filenames=get_filenames(argv[1], extensions, COUNTOF(extensions));
-	ASSERT_MSG(filenames->count, "No images in dataset path \'%s\'", argv[1]);
+	ArrayHandle filenames=get_filenames(model.trainpath->data, extensions, COUNTOF(extensions));
+	ASSERT_MSG(filenames->count, "No images found in train path \'%s\'", (char*)model.trainpath->data);
 
 	//train
-	double av_loss=0, loss=_HUGE,
+	double av_loss=0, loss=0,
 		beta1=0.94, beta2=0.9878, epsilon=1e-8,//adam optimizer
-		beta1_t=1, beta2_t=1;
+		beta1_t=beta1, beta2_t=beta2;
 	int nbatches=0;
 	int ki=0,//points at current image to load
 		kblock=0;//points at current image block in case of block augmentation
-	double timestamp1=time_ms();
-	for(int ke=0;;)
+	double timestamp1=time_ms(), timestamp2;
+	int ke=0;
+	cl_mem gpu_indices=0, gpu_adam_params=0;
+	int qlevels=0;
+	size_t osize;
+	cl_kernel kernel;
+	if(using_gpu)
+	{
+		Buffer *buf;
+		size_t size;
+		Instruction *inst;
+
+		buf=(Buffer*)array_at(&model.buffers, model.input);
+		size=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
+		model.gpu_input=(float*)malloc(size*sizeof(float));
+
+		inst=(Instruction*)array_at(&model.instructions, model.instructions->count-1);
+		buf=(Buffer*)array_at(&model.buffers, inst->fwd_result);
+		size=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
+		model.gpu_output=(float*)malloc(size*sizeof(float));
+
+		gpu_indices		=p_clCreateBuffer(context, CL_MEM_READ_ONLY, 17*sizeof(int), 0, &error);	CL_CHECK(error);
+		gpu_adam_params	=p_clCreateBuffer(context, CL_MEM_READ_ONLY, 6*sizeof(float), 0, &error);	CL_CHECK(error);
+
+		for(int ki=0;ki<(int)model.instructions->count;++ki)
+		{
+			Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+			if(inst->op==OP_QUANTIZER)
+			{
+				qlevels=inst->info[0];
+				break;
+			}
+		}
+	}
+	for(;;)
 	{
 		//load data
-		int epoch_inc=load_data(argv[1], filenames, &ki, &kblock, &model);
+		int epoch_inc=load_data((char*)model.trainpath, filenames, &ki, &kblock, &model);
 		if(epoch_inc)
 		{
-			double timestamp2=time_ms();
+			timestamp2=time_ms();
 			++ke;
 			av_loss/=nbatches;
 			double psnr=20*log10(255/av_loss);
@@ -1617,203 +2661,230 @@ int main(int argc, char **argv)
 
 			if(ke>=epoch)
 				break;
+			
 			av_loss=0, nbatches=0;
+
+			beta1_t*=beta1;//Adam Optimizer
+			beta2_t*=beta2;
 		}
 
-		//forward
-		for(int ki=0;ki<(int)model.instructions->count;++ki)
+		if(using_gpu)
 		{
-			Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
-#ifdef DEBUG_AUTOGRAD
-			const char *a=0;
-			switch(inst->op)
+			loss=forward_gpu(&model, 0, ke, qlevels, &cpu_indices, gpu_indices, 0);
+
+			for(int ki=(int)model.instructions->count-1;ki>=0;--ki)		//GPU backward
 			{
-			case OP_CC2			:a="OP_CC2      ";break;
-			case OP_CONV2		:a="OP_CONV2    ";break;
-			case OP_RELU		:a="OP_RELU     ";break;
-			case OP_LRELU		:a="OP_LRELU    ";break;
-			case OP_QUANTIZER	:a="OP_QUANTIZER";break;
-			case OP_MSE			:a="OP_MSE      ";break;
-			case OP_MS_SSIM		:a="OP_MS_SSIM  ";break;
+				Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+				switch(inst->op)
+				{
+				case OP_CC2:
+					{
+						Buffer
+							*dL_dnet	=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
+							*filt		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+							*in			=(Buffer*)array_at(&model.buffers, inst->bwd_args[2]),
+							*dL_din		=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]),
+							*dL_dfilt	=(Buffer*)array_at(&model.buffers, inst->bwd_results[1]),
+							*dL_dbias	=(Buffer*)array_at(&model.buffers, inst->bwd_results[2]);
+
+						kernel=kernels[OCL_cc2d_grad_in];
+						osize=dL_din->shape[0]*dL_din->shape[1]*dL_din->shape[2]*dL_din->shape[3];
+						error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);		CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &dL_dnet->gpu_buf);	CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &model.gpu_params);	CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &dL_din->gpu_buf);	CL_CHECK(error);
+						error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
+
+						kernel=kernels[OCL_cc2d_grad_filt];
+						osize=dL_dfilt->shape[0]*dL_dfilt->shape[1]*dL_dfilt->shape[2]*dL_dfilt->shape[3];
+						error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);		CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &dL_dnet->gpu_buf);	CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &in->gpu_buf);		CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &model.gpu_grad);		CL_CHECK(error);
+						error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
+
+						kernel=kernels[OCL_cc2d_grad_bias];
+						osize=dL_dbias->shape[0]*dL_dbias->shape[1]*dL_dbias->shape[2]*dL_dbias->shape[3];
+						error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);		CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &dL_dnet->gpu_buf);	CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &model.gpu_grad);		CL_CHECK(error);
+						error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
+
+						p_clFlush(commandqueue);
+						p_clFinish(commandqueue);
+					}
+					break;
+				case OP_CONV2:
+					LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
+					break;
+				case OP_LRELU:
+				case OP_RELU:
+					{
+						Buffer
+							*bufdL_dout	=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
+							*bufout		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+							*bufdL_din	=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
+
+						kernel=0;
+						switch(inst->op)
+						{
+						case OP_LRELU:	kernel=kernels[OCL_lrelu_grad	];break;
+						case OP_RELU:	kernel=kernels[OCL_relu_grad	];break;
+						}
+						for(int ki2=ki-1;ki2>=0;--ki2)//look for a conv instruction before, and take its indices
+						{
+							inst=(Instruction*)array_at(&model.instructions, ki2);
+							if(inst->op==OP_CC2||inst->op==OP_CONV2)
+							{
+								fill_indices(&model, ki2, ke, qlevels, &cpu_indices, gpu_indices);
+								break;
+							}
+						}
+						osize=bufdL_din->shape[0]*bufdL_din->shape[1]*bufdL_din->shape[2]*bufdL_din->shape[3];
+						error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);		CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufdL_dout->gpu_buf);CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &bufout->gpu_buf);	CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &bufdL_din->gpu_buf);	CL_CHECK(error);
+						error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
+						p_clFlush(commandqueue);
+						p_clFinish(commandqueue);
+					}
+					break;
+				case OP_QUANTIZER://identity
+				case OP_MSE://identity
+					break;
+				case OP_MS_SSIM:
+					LOG_ERROR("MS-SSIM is not supported yet. Use MSE.");
+					break;
+				default:
+					LOG_ERROR("Unrecognized instruction type %d.", inst->op);
+					break;
+				}
 			}
-			printf("fwd %d/%d %s\n", ki+1, (int)model.instructions->count, a);//
+			adam_params.lr=(float)lr;
+			adam_params.beta1=(float)beta1;
+			adam_params.beta2=(float)beta2;
+			adam_params.epsilon=(float)epsilon;
+			adam_params.gain1=(float)(1/(1-beta1_t));
+			adam_params.gain2=(float)(1/(1-beta2_t));
+#ifdef FIXED_PREC
+			for(int k=0;k<sizeof(adam_params)/sizeof(float);++k)
+			{
+				float *val=(float*)&adam_params+k;
+				*(int*)val=*val*0x10000;
+			}
 #endif
-			switch(inst->op)
-			{
-			case OP_CC2:
-				{
-					Buffer
-						*bufx=(Buffer*)array_at(&model.buffers, inst->fwd_args[0]),
-						*buff=(Buffer*)array_at(&model.buffers, inst->fwd_args[1]),
-						*bufb=(Buffer*)array_at(&model.buffers, inst->fwd_args[2]),
-						*buf2=(Buffer*)array_at(&model.buffers, inst->fwd_result);
-//#ifdef DEBUG_AUTOGRAD
-//					printf("fwd %d %d %d result %d, out shape [%d %d %d %d]\n",
-//						inst->fwd_args[0], inst->fwd_args[1], inst->fwd_args[2], inst->fwd_result,
-//						buf2->shape[0], buf2->shape[1], buf2->shape[2], buf2->shape[3]);//
-//#endif
-					crosscorrelation2d(&model, bufx, buff, bufb, buf2, 1);
-				}
-				continue;
-			case OP_CONV2:
-				LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
-				//{
-				//	Buffer
-				//		*bufx=(Buffer*)array_at(&model.buffers, inst->fwd_args[0]),
-				//		*buff=(Buffer*)array_at(&model.buffers, inst->fwd_args[1]),
-				//		*bufb=(Buffer*)array_at(&model.buffers, inst->fwd_args[2]),
-				//		*buf2=(Buffer*)array_at(&model.buffers, inst->fwd_result);
-				//	conv2d(&model, bufx, buff, bufb, buf2, 1);
-				//}
-				continue;
-			case OP_LRELU:
-				{
-					Buffer
-						*src=(Buffer*)array_at(&model.buffers, inst->fwd_args[0]),
-						*dst=(Buffer*)array_at(&model.buffers, inst->fwd_result);
-					ASSERT_MSG(src->type==BUF_NORMAL, "LReLU cannot be applied to learnable parameters, src->type = %d", src->type);
-					ASSERT_MSG(dst->type==BUF_NORMAL, "LReLU cannot be applied to learnable parameters, src->type = %d", dst->type);
-					LeakyReLU(src->data, dst->data, src->shape[0]*src->shape[1]*src->shape[2]*src->shape[3]);
-				}
-				continue;
-			case OP_RELU:
-				{
-					Buffer
-						*src=(Buffer*)array_at(&model.buffers, inst->fwd_args[0]),
-						*dst=(Buffer*)array_at(&model.buffers, inst->fwd_result);
-					ASSERT_MSG(src->type==BUF_NORMAL, "ReLU cannot be applied to learnable parameters, src->type = %d", src->type);
-					ASSERT_MSG(dst->type==BUF_NORMAL, "ReLU cannot be applied to learnable parameters, src->type = %d", dst->type);
-					ReLU(src->data, dst->data, src->shape[0]*src->shape[1]*src->shape[2]*src->shape[3]);
-				}
-				continue;
-			case OP_QUANTIZER:
-				quantizer_train_fwd(&model, inst);
-				continue;
-			case OP_MSE:
-				{
-					Buffer
-						*s1=(Buffer*)array_at(&model.buffers, inst->fwd_args[0]),
-						*s2=(Buffer*)array_at(&model.buffers, inst->fwd_args[1]),
-						*dst=(Buffer*)array_at(&model.buffers, inst->fwd_result);
-					ASSERT_MSG(s1->type==BUF_NORMAL, "MSE cannot be applied to learnable parameters, src->type = %d", s1->type);
-					ASSERT_MSG(s2->type==BUF_NORMAL, "MSE cannot be applied to learnable parameters, src->type = %d", s2->type);
-					ASSERT_MSG(dst->type==BUF_NORMAL, "MSE cannot be applied to learnable parameters, src->type = %d", dst->type);
-					size_t count=s1->shape[0]*s1->shape[1]*s1->shape[2]*s1->shape[3];
-					loss=0;
-					for(size_t k=0;k<count;++k)
-					{
-						dst->data[k]=s1->data[k]-s2->data[k];
-						loss+=dst->data[k]*dst->data[k];
-					}
-					loss/=count<<1;
-				}
-				break;
-			case OP_MS_SSIM:
-				LOG_ERROR("MS-SSIM is not supported yet. Use MSE.");
-				break;
-			default:
-				LOG_ERROR("Unrecognized instruction type %d.", inst->op);
-				break;
-			}
-			break;
+			error=p_clEnqueueWriteBuffer(commandqueue, gpu_adam_params, CL_TRUE, 0, sizeof(adam_params), &adam_params, 0, 0, 0);	CL_CHECK(error);
+			kernel=kernels[OCL_opt_adam];
+			error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_adam_params);	CL_CHECK(error);
+			error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &model.gpu_grad);		CL_CHECK(error);
+			error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &model.gpu_adam_m);	CL_CHECK(error);
+			error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &model.gpu_adam_v);	CL_CHECK(error);
+			error=p_clSetKernelArg(kernel, 4, sizeof(cl_mem), &model.gpu_params);	CL_CHECK(error);
+			error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &model.nparams, 0, 0, 0, 0);	CL_CHECK(error);
+			p_clFlush(commandqueue);
+			p_clFinish(commandqueue);
 		}
-
-		//backward
-		for(int ki=(int)model.instructions->count-1;ki>=0;--ki)
+		else
 		{
-			Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+			loss=forward_cpu(&model, 0, 0);
+
+			//CPU backward
+			for(int ki=(int)model.instructions->count-1;ki>=0;--ki)
+			{
+				Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
 #ifdef DEBUG_AUTOGRAD
-			const char *a=0;
-			switch(inst->op)
-			{
-			case OP_CC2			:a="OP_CC2      ";break;
-			case OP_CONV2		:a="OP_CONV2    ";break;
-			case OP_RELU		:a="OP_RELU     ";break;
-			case OP_LRELU		:a="OP_LRELU    ";break;
-			case OP_QUANTIZER	:a="OP_QUANTIZER";break;
-			case OP_MSE			:a="OP_MSE      ";break;
-			case OP_MS_SSIM		:a="OP_MS_SSIM  ";break;
-			}
-			printf("bwd %d/%d %s\n", ki+1, (int)model.instructions->count, a);//
+				const char *a=0;
+				switch(inst->op)
+				{
+				case OP_CC2			:a="OP_CC2      ";break;
+				case OP_CONV2		:a="OP_CONV2    ";break;
+				case OP_RELU		:a="OP_RELU     ";break;
+				case OP_LRELU		:a="OP_LRELU    ";break;
+				case OP_QUANTIZER	:a="OP_QUANTIZER";break;
+				case OP_MSE			:a="OP_MSE      ";break;
+				case OP_MS_SSIM		:a="OP_MS_SSIM  ";break;
+				}
+				printf("bwd %d/%d %s\n", ki+1, (int)model.instructions->count, a);//
 #endif
-			switch(inst->op)
-			{
-			case OP_CC2:
+				switch(inst->op)
 				{
-					Buffer
-						*dL_dnet	=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
-						*filt		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
-						*x			=(Buffer*)array_at(&model.buffers, inst->bwd_args[2]),
-						*dL_dx		=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]),
-						*dL_dfilt	=(Buffer*)array_at(&model.buffers, inst->bwd_results[1]),
-						*dL_dbias	=(Buffer*)array_at(&model.buffers, inst->bwd_results[2]);
-					dcrosscorrelation_dx_2d(&model, dL_dnet, filt, dL_dx);
-					dcrosscorrelation_dfilt_2d(&model, dL_dnet, x, dL_dfilt, inst->info[0], inst->info[1]);
-					dcrosscorrelation_dbias_2d(&model, dL_dnet, dL_dbias);
-				}
-				break;
-			case OP_CONV2:
-				LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
-				break;
-			case OP_LRELU:
-				{
-					Buffer
-						*dL_dx2		=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
-						*net		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
-						*dL_dnet	=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
-					ASSERT_MSG(dL_dx2->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dx2->type);
-					ASSERT_MSG(net->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", net->type);
-					ASSERT_MSG(dL_dnet->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dnet->type);
-					size_t size=net->shape[0]*net->shape[1]*net->shape[2]*net->shape[3];
-					for(int k=0;k<size;++k)//dL_dx2 .* act'(net)
+				case OP_CC2:
 					{
-						double x=net->data[k];
-						dL_dnet->data[k]=dL_dx2->data[k];
-						if(x<0)
-							dL_dnet->data[k]*=0.01;
+						Buffer
+							*dL_dnet	=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
+							*filt		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+							*x			=(Buffer*)array_at(&model.buffers, inst->bwd_args[2]),
+							*dL_dx		=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]),
+							*dL_dfilt	=(Buffer*)array_at(&model.buffers, inst->bwd_results[1]),
+							*dL_dbias	=(Buffer*)array_at(&model.buffers, inst->bwd_results[2]);
+						dcrosscorrelation_dx_2d(&model, dL_dnet, filt, dL_dx);
+						dcrosscorrelation_dfilt_2d(&model, dL_dnet, x, dL_dfilt, inst->info[0], inst->info[1]);
+						dcrosscorrelation_dbias_2d(&model, dL_dnet, dL_dbias);
 					}
-				}
-				break;
-			case OP_RELU:
-				{
-					Buffer
-						*dL_dx2		=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
-						*net		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
-						*dL_dnet	=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
-					ASSERT_MSG(dL_dx2->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dx2->type);
-					ASSERT_MSG(net->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", net->type);
-					ASSERT_MSG(dL_dnet->type==BUF_NORMAL, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dnet->type);
-					size_t size=net->shape[0]*net->shape[1]*net->shape[2]*net->shape[3];
-					for(int k=0;k<size;++k)//dL_dx2 .* act'(net)
+					break;
+				case OP_CONV2:
+					LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
+					break;
+				case OP_LRELU:
 					{
-						double x=net->data[k];
-						dL_dnet->data[k]=x<0?0:dL_dx2->data[k];
+						Buffer
+							*dL_dout=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
+							*out	=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+							*dL_din	=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
+						ASSERT_MSG(dL_dout->type==BUF_NORMAL||dL_dout->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dout->type);
+						ASSERT_MSG(out->type==BUF_NORMAL||out->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", out->type);
+						ASSERT_MSG(dL_din->type==BUF_NORMAL||dL_din->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_din->type);
+						size_t size=out->shape[0]*out->shape[1]*out->shape[2]*out->shape[3];
+						for(int k=0;k<size;++k)//dL_dout .* act'(out)
+						{
+							dL_din->data[k]=dL_dout->data[k];
+							if(out->data[k]<0)
+								dL_din->data[k]*=0.01;
+						}
 					}
+					break;
+				case OP_RELU:
+					{
+						Buffer
+							*dL_dx2	=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
+							*x2		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+							*dL_dnet=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
+						ASSERT_MSG(dL_dx2->type==BUF_NORMAL||dL_dx2->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dx2->type);
+						ASSERT_MSG(x2->type==BUF_NORMAL||x2->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", x2->type);
+						ASSERT_MSG(dL_dnet->type==BUF_NORMAL||dL_dnet->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dnet->type);
+						size_t size=x2->shape[0]*x2->shape[1]*x2->shape[2]*x2->shape[3];
+						for(int k=0;k<size;++k)//dL_dx2 .* act'(x2)
+						{
+							double x=x2->data[k];
+							dL_dnet->data[k]=x<0?0:dL_dx2->data[k];
+						}
+					}
+					break;
+				case OP_QUANTIZER://identity
+				case OP_MSE://identity
+					break;
+				case OP_MS_SSIM:
+					LOG_ERROR("MS-SSIM is not supported yet.");
+					break;
+				default:
+					LOG_ERROR("Unrecognized instruction %d.", inst->op);
+					break;
 				}
-				break;
-			case OP_QUANTIZER://identity
-			case OP_MSE://identity
-				break;
-			case OP_MS_SSIM:
-				LOG_ERROR("MS-SSIM is not supported yet.");
-				break;
-			default:
-				LOG_ERROR("Unrecognized instruction %d.", inst->op);
-				break;
 			}
-		}
-		
-		mix_inplace((double*)model.adam_m->data, (double*)model.grad->data, beta1, model.grad->count);
-		sq_inplace((double*)model.grad->data, model.grad->count);
-		mix_inplace((double*)model.adam_v->data, (double*)model.grad->data, beta2, model.grad->count);
 
-		beta1_t*=beta1;
-		beta2_t*=beta2;
-		double gain1=1/(1-beta1_t), gain2=1/(1-beta2_t);
-		for(int k=0;k<model.grad->count;++k)//https://optimization.cbe.cornell.edu/index.php?title=Adam
-		{
-			double mhat=((double*)model.adam_m->data)[k]*gain1, vhat=((double*)model.adam_v->data)[k]*gain2;
-			((double*)model.params->data)[k]-=lr*mhat/(sqrt(vhat)+epsilon);
+			mix_inplace((double*)model.cpu_adam_m->data, (double*)model.cpu_grad->data, beta1, model.cpu_grad->count);
+			sq_inplace((double*)model.cpu_grad->data, model.cpu_grad->count);
+			mix_inplace((double*)model.cpu_adam_v->data, (double*)model.cpu_grad->data, beta2, model.cpu_grad->count);
+
+			double gain1=1/(1-beta1_t), gain2=1/(1-beta2_t);
+			for(int k=0;k<model.cpu_grad->count;++k)//https://optimization.cbe.cornell.edu/index.php?title=Adam
+			{
+				double
+					mhat=((double*)model.cpu_adam_m->data)[k]*gain1,
+					vhat=((double*)model.cpu_adam_v->data)[k]*gain2;
+				((double*)model.cpu_params->data)[k]-=lr*mhat/(sqrt(vhat)+epsilon);
+			}
 		}
 
 		loss=255*sqrt(loss);
@@ -1824,6 +2895,72 @@ int main(int argc, char **argv)
 	}
 
 	save_model(&model, 0, av_loss);
+	
+
+	//test
+	array_free(&filenames);
+	filenames=get_filenames(model.testpath->data, extensions, COUNTOF(extensions));
+	ASSERT_MSG(filenames->count, "No images found in test path \'%s\'", (char*)model.testpath->data);
+
+	//change batch size to filenames->count
+#if 0
+	ASSERT_MSG(filenames->count<=64, "Test dataset has too many samples (max is 64)");
+	for(int ki=(int)model.instructions->count-1;ki>=0;--ki)
+	{
+		Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+		switch(inst->op)
+		{
+		case OP_CC2:
+			break;
+		case OP_CONV2:
+			break;
+		case OP_LRELU:
+			break;
+		case OP_RELU:
+			break;
+		case OP_QUANTIZER:
+			break;
+		case OP_MSE:
+			break;
+		case OP_MS_SSIM:
+			break;
+		}
+	}
+#endif
+	ResultCtx res={0};
+	res.nsaves=1;//for each sample: {savedBuffers..., lossDiff}
+	for(int kb=0;kb<model.buffers->count;++kb)
+	{
+		Buffer *buf=(Buffer*)array_at(&model.buffers, kb);
+		res.nsaves+=buf->type==BUF_NORMAL_SAVED;
+	}
+	int bsize=model.input_shape[0];
+	res.bcountx=(int)ceil(sqrt(bsize));
+	res.bcounty=(bsize+res.bcountx-1)/res.bcountx;
+	res.bsizex=model.input_shape[3];
+	res.bsizey=model.input_shape[2];
+	res.size=res.nsaves*res.bcounty*res.bcountx*res.bsizey*res.bsizex;
+	res.rgb=(int*)malloc(res.size*sizeof(int));
+	int black=0xFF000000;
+	memfill(res.rgb, &black, res.size*sizeof(int), sizeof(int));
+
+	load_data((char*)model.trainpath, filenames, &ki, &kblock, &model);
+	
+	timestamp1=time_ms();
+	if(using_gpu)
+		loss=forward_gpu(&model, 1, 0, qlevels, &cpu_indices, gpu_indices, &res);
+	else
+		loss=forward_cpu(&model, 1, &res);
+	timestamp2=time_ms();
+	
+	loss=255*sqrt(loss);
+	double psnr=20*log10(255/loss);
+	acme_strftime(g_buf, G_BUF_SIZE, (timestamp2-timestamp1)/1000);
+	printf("Test RMSE %16.12lf PSNR %13.9lf %10lf ms %s\n", loss, psnr, timestamp2-timestamp1, g_buf);
+
+	//save result
+	result_save(&res, loss, 0);
+
 	free_model(&model);
 #endif
 
@@ -1965,7 +3102,7 @@ int main(int argc, char **argv)
 	
 	//create context & command queue
 #ifdef CL_GL_INTEROP
-	cl_context_properties properties[8]={};		
+	cl_context_properties properties[8]={};
 	if(cl_gl_interop)
 	{
 		auto gl_context=eglGetCurrentContext();//changes when resuming

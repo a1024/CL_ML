@@ -7,7 +7,7 @@ static const char file[]=__FILE__;
 
 //ARRAY
 #if 1
-static void		array_realloc(ArrayHandle *arr, size_t count, size_t pad)//CANNOT be nullptr, array must be initialized with array_alloc()
+void			array_realloc(ArrayHandle *arr, size_t count, size_t pad)//CANNOT be nullptr, array must be initialized with array_alloc()
 {
 	ArrayHandle p2;
 	size_t size, newcap;
@@ -179,22 +179,19 @@ void*			array_replace(ArrayHandle *arr, size_t idx, size_t rem_count, const void
 
 size_t			array_size(ArrayHandle const *arr)//can be nullptr
 {
-	if(!arr[0])
-		return 0;
+	ASSERT_MSG(arr[0], "array_size(): arr == NULL");
 	return arr[0]->count;
 }
 void*			array_at(ArrayHandle *arr, size_t idx)
 {
-	if(!arr[0])
-		return 0;
-	if(idx>=arr[0]->count)
-		return 0;
+	ASSERT_MSG(arr[0], "array_at(): arr == NULL");
+	ASSERT_MSG(idx<arr[0]->count, "array_at(): OOB, [%lld], size %lld", idx, arr[0]->count);
 	return arr[0]->data+idx*arr[0]->esize;
 }
 void*			array_back(ArrayHandle *arr)
 {
-	if(!*arr||!arr[0]->count)
-		return 0;
+	ASSERT_MSG(arr[0], "array_back(): arr == NULL");
+	ASSERT_MSG(arr[0]->count, "array_back(): arr is empty");
 	return arr[0]->data+(arr[0]->count-1)*arr[0]->esize;
 }
 #endif

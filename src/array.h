@@ -23,6 +23,7 @@ typedef struct ArrayHeaderStruct
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
+void			array_realloc(ArrayHandle *arr, size_t count, size_t pad);
 ArrayHandle		array_construct(const void *src, size_t esize, size_t count, size_t rep, size_t pad, void (*destructor)(void*));
 ArrayHandle		array_copy(ArrayHandle *arr);//shallow
 void			array_clear(ArrayHandle *arr);//keeps allocation
