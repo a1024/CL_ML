@@ -19,6 +19,8 @@
 
 //	#define DEBUG_KERNELS
 
+	#define		CONST		__constant
+//	#define		CONST		__global const
 #ifdef FIXED_PREC
 typedef int DataType; 
 #define		MUL(A, B)		((long)(A)*(B)>>16)
@@ -66,10 +68,10 @@ typedef struct ConvInfoStruct//68 bytes
 //	CC2_OB, CC2_OC, CC2_OH, CC2_OW,
 //	CC2_XP, CC2_YP, CC2_XS, CC2_YS,
 //} CC2Idx;
-__kernel void cc2d			(__global const int *indices, __global const DataType *in, __global const DataType *params, __global DataType *out)//for each output value from [B,Co,Ho,Wo]
+__kernel void cc2d			(CONST int *indices, __global const DataType *in, __global const DataType *params, __global DataType *out)//for each output value from [B,Co,Ho,Wo]
 {
 	int idx=get_global_id(0), idx2=idx;
-	__global ConvInfo const *info=(__global ConvInfo const*)indices;
+	CONST ConvInfo *info=(CONST ConvInfo*)indices;
 	__global DataType const *filt, *inch;
 	int kres=info->Kw*info->Kh, ires=info->Wi*info->Hi;
 	//int B=iidx->B,
@@ -154,10 +156,10 @@ __kernel void cc2d			(__global const int *indices, __global const DataType *in, 
 	//else if(!idx)
 	//	printf("%08X\n", as_int(sum));
 }
-__kernel void cc2d_grad_in	(__global const int *indices, __global const DataType *dL_dnet, __global const DataType *params, __global DataType *dL_din)//for each input value from [B,Ci,Hi,Wi]
+__kernel void cc2d_grad_in	(CONST int *indices, __global const DataType *dL_dnet, __global const DataType *params, __global DataType *dL_din)//for each input value from [B,Ci,Hi,Wi]
 {
 	int idx=get_global_id(0), idx2=idx;
-	__global ConvInfo const *info=(__global ConvInfo const*)indices;
+	CONST ConvInfo *info=(CONST ConvInfo*)indices;
 	__global DataType const *filt, *outch;
 	int kres=info->Kw*info->Kh, ores=info->Wo*info->Ho;
 	int kb, kic, kiy, kix;
@@ -187,11 +189,11 @@ __kernel void cc2d_grad_in	(__global const int *indices, __global const DataType
 	}
 	dL_din[idx]=sum;
 }
-__kernel void cc2d_grad_filt(__global const int *indices, __global const DataType *dL_dnet, __global const DataType *in, __global DataType *grad_dL_dfilt)//for each weight from [Co,Ci,Kh,Kw]
+__kernel void cc2d_grad_filt(CONST int *indices, __global const DataType *dL_dnet, __global const DataType *in, __global DataType *grad_dL_dfilt)//for each weight from [Co,Ci,Kh,Kw]
 {
 	int idx=get_global_id(0), idx2=idx;
+	CONST ConvInfo *info=(CONST ConvInfo*)indices;
 	__global DataType const *netch, *outch;
-	__global ConvInfo const *info=(__global ConvInfo const*)indices;
 	int ores=info->Wo*info->Ho, ires=info->Wi*info->Hi;
 	int koc, kic, kky, kkx;
 	kkx=idx2%info->Kw, idx2/=info->Kw;
@@ -223,10 +225,10 @@ __kernel void cc2d_grad_filt(__global const int *indices, __global const DataTyp
 	//if(idx<100)//DEBUG
 	//	printf("cc2d_grad_filt [[%d]] dL_dfilt %g\n", idx, grad_dL_dfilt[idx]);
 }
-__kernel void cc2d_grad_bias(__global const int *indices, __global const DataType *dL_dnet, __global DataType *grad_dL_dbias)//for each bias from [Co]
+__kernel void cc2d_grad_bias(CONST int *indices, __global const DataType *dL_dnet, __global DataType *grad_dL_dbias)//for each bias from [Co]
 {
 	int idx=get_global_id(0);
-	__global ConvInfo const *info=(__global ConvInfo const*)indices;
+	CONST ConvInfo *info=(CONST ConvInfo*)indices;
 	__global DataType const *src;
 	//just sum dL_dnet over [B, -, Ho, Wo]
 	int ores=info->Wo*info->Ho;
@@ -246,13 +248,13 @@ __kernel void cc2d_grad_bias(__global const int *indices, __global const DataTyp
 }
 
 //element-wise operations (eg: nonlinearity, quantizer) use same indices array as cc/conv, and operate on [B,Co,Ho,Wo]
-__kernel void lrelu			(__global const int *indices, __global const DataType *in, __global DataType *out)//for each [B,Co,Ho,Wo]
+__kernel void lrelu			(CONST int *indices, __global const DataType *in, __global DataType *out)//for each [B,Co,Ho,Wo]
 {
 	int idx=get_global_id(0);
 	DataType x=in[idx];
 	out[idx]=x<0?MUL(ONE_PERCENT, x):x;
 }
-__kernel void lrelu_grad	(__global const int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)//for each [B,Co,Ho,Wo]
+__kernel void lrelu_grad	(CONST int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)//for each [B,Co,Ho,Wo]
 {
 	int idx=get_global_id(0);
 	if(in[idx]<0)//dL_din = dL_dout .* act'(in)
@@ -264,13 +266,13 @@ __kernel void lrelu_grad	(__global const int *indices, __global const DataType *
 	//	printf("lrelu_grad [[%d]] dL_dout %g  in %g -> dL_din %g\n", idx, dL_dout[idx], in[idx], dL_din[idx]);
 }
 
-__kernel void relu			(__global const int *indices, __global const DataType *in, __global DataType *out)//for each [B,Co,Ho,Wo]
+__kernel void relu			(CONST int *indices, __global const DataType *in, __global DataType *out)//for each [B,Co,Ho,Wo]
 {
 	int idx=get_global_id(0);
 	DataType x=in[idx];
 	out[idx]=x<0?0:x;
 }
-__kernel void relu_grad		(__global const int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)//for each [B,Co,Ho,Wo]
+__kernel void relu_grad		(CONST int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)//for each [B,Co,Ho,Wo]
 {
 	int idx=get_global_id(0);//dL_din = dL_dout .* act'(in)
 	dL_din[idx]=dL_dout[idx]*(in[idx]>=0);
@@ -292,17 +294,17 @@ DataType rand(unsigned seed)//between [0, 1]
 #endif
 	return x;
 }
-__kernel void quantizer_train(__global const int *indices, __global const DataType *in, __global DataType *out)
+__kernel void quantizer_train(CONST int *indices, __global const DataType *in, __global DataType *out)
 {
 	int idx=get_global_id(0);
-	__global ConvInfo const *info=(__global ConvInfo const*)indices;
+	CONST ConvInfo *info=(CONST ConvInfo*)indices;
 	DataType x=in[idx]+rand(idx*info->epoch)/info->qlevels;//should work with float and fixed
 	out[idx]=clamp(x, ZERO, ONE);
 
 	//if(idx<50)//DEBUG
 	//	printf("[[%d]] %g clamp %g\n", idx, x, out[idx]);
 }
-__kernel void quantizer_grad(__global const int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)
+__kernel void quantizer_grad(CONST int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)
 {
 	int idx=get_global_id(0);//dL_din = dL_dout .* rect(in)
 
@@ -318,10 +320,10 @@ __kernel void quantizer_grad(__global const int *indices, __global const DataTyp
 	//if(idx<50)//DEBUG
 	//	printf("[[%d]] dL_dout %g in %g\n", idx, dL_dout[idx], in[idx]);
 }
-__kernel void quantizer_test(__global const int *indices, __global const DataType *in, __global DataType *out)
+__kernel void quantizer_test(CONST int *indices, __global const DataType *in, __global DataType *out)
 {
 	int idx=get_global_id(0);
-	__global ConvInfo const *info=(__global ConvInfo const*)indices;
+	CONST ConvInfo *info=(CONST ConvInfo*)indices;
 	DataType x=in[idx];
 	x*=info->qlevels;
 	x=ROUND(x);
@@ -329,10 +331,10 @@ __kernel void quantizer_test(__global const int *indices, __global const DataTyp
 	out[idx]=clamp(x, ZERO, ONE);
 }
 
-__kernel void loss_MSE		(__global const int *indices, __global const DataType *s1, __global const DataType *s2, __global DataType *diff)
+__kernel void loss_MSE		(CONST int *indices, __global const DataType *s1, __global const DataType *s2, __global DataType *diff)
 {
 	int idx=get_global_id(0);
-	__global ConvInfo const *info=(__global ConvInfo const*)indices;
+	CONST ConvInfo *info=(CONST ConvInfo*)indices;
 
 	//if(idx<50)//DEBUG
 	//	printf("[[%d]] xhat %g x %g\n", idx, s1[idx], s2[idx]);//
@@ -344,10 +346,10 @@ typedef struct AdamInfoStruct
 {
 	DataType lr, beta1, beta2, epsilon, gain1, gain2;//gain[i] = 1/(1-pow(beta[i], epoch))
 } AdamInfo;
-__kernel void opt_adam		(__global const DataType *betas, __global const DataType *grad, __global DataType *adam_m, __global DataType *adam_v, __global DataType *params)//for each learnable parameter
+__kernel void opt_adam		(CONST DataType *betas, __global const DataType *grad, __global DataType *adam_m, __global DataType *adam_v, __global DataType *params)//for each learnable parameter
 {
 	int idx=get_global_id(0);
-	__global AdamInfo const *info=(__global AdamInfo const*)betas;
+	CONST AdamInfo *info=(CONST AdamInfo*)betas;
 
 	//params[idx]-=MUL(info->lr, grad[idx]);//SGD
 
