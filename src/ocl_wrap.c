@@ -1,5 +1,10 @@
+#include"acme_stdio.h"
+#ifdef _MSC_VER
 #define WIN32_LEAN_AND_MEAN
 #include<Windows.h>
+#elif defined __linux__
+#include<dlfcn.h>
+#endif
 #include"ocl_wrap.h"
 #include"util.h"
 #include"error.h"

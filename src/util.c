@@ -145,7 +145,11 @@ double	_10pow(int n)
 	if(n<-308)
 		return 0;
 	if(n>307)
+#ifdef _MSC_VER
 		return _HUGE;
+#elif defined __linux__
+		return HUGE_VAL;
+#endif
 	return mask[n+308];
 }
 

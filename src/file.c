@@ -1,6 +1,7 @@
 #include"acme_stdio.h"
 #include<string.h>
 #include<sys/stat.h>
+#include<errno.h>
 #include"array.h"
 #include"error.h"
 static const char file[]=__FILE__;

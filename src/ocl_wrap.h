@@ -9,8 +9,10 @@ extern "C"
 #include<CL/opencl.h>
 
 
+#ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable:4229)//anachronism used : modifiers on data are ignored
+#endif
 typedef cl_int			(*CL_API_CALL t_clGetPlatformIDs)(cl_uint num_entries, cl_platform_id *platforms, cl_uint *num_platforms);
 typedef cl_int			(*CL_API_CALL t_clGetPlatformInfo)(cl_platform_id platform, cl_platform_info param_name, size_t param_value_size, void *param_value, size_t *param_value_size_ret);
 typedef cl_int			(*CL_API_CALL t_clGetDeviceIDs)(cl_platform_id platform, cl_device_type device_type, cl_uint num_entries, cl_device_id *devices, cl_uint *num_devices);
@@ -41,7 +43,9 @@ typedef cl_int			(*CL_API_CALL t_clReleaseMemObject)(cl_mem memobj);
 typedef cl_int			(*CL_API_CALL t_clReleaseKernel)(cl_kernel kernel);
 typedef cl_int			(*CL_API_CALL t_clReleaseProgram)(cl_program program);
 typedef cl_int			(*CL_API_CALL t_clReleaseCommandQueue)(cl_command_queue command_queue);
+#ifdef _MSC_VER
 #pragma warning(pop)
+#endif
 
 #define OPENCL_FUNC(FUNCNAME)	extern t_##FUNCNAME p_##FUNCNAME
 #include"ocl_wrap_func.h"

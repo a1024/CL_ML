@@ -1,5 +1,5 @@
-#define _CRT_SECURE_NO_WARNINGS
 #include"acme_stdio.h"
+#include<stddef.h>
 #include<stdarg.h>
 #include<stdlib.h>
 #include<string.h>
@@ -17,10 +17,10 @@ wchar_t g_wbuf[G_BUF_SIZE]={0};
 
 void	pause()
 {
-	int k;
+	int k, count;
 
 	printf("Enter 0 to continue: ");
-	scanf("%d", &k);
+	count=scanf("%d", &k);
 }
 int		valid(const void *ptr)
 {

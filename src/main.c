@@ -6,11 +6,16 @@
 #include"util.h"
 #ifdef _MSC_VER
 #include<Windows.h>
+#include<intrin.h>
+#elif defined __linux__
+#include<x86intrin.h>
+#include<dirent.h>
+#include<pthread.h>
 #endif
 #include<stdarg.h>
 #include<time.h>
 #include<math.h>
-#include<intrin.h>
+#include<ctype.h>
 #include"lodepng.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include"stb_image.h"
@@ -65,7 +70,12 @@ void			prof_end()
 			longestLabel=len;
 	}
 	for(int k=0;k<PROF_COUNT;++k)
-		printf("%s%*s:\t%d\t%12lld\t%.2lf%%\t%19lf\n", prof_labels[k], longestLabel-strlen(prof_labels[k]), "", prof_count[k], prof_cycles[k], 100.*prof_cycles[k]/sum, (double)prof_cycles[k]/prof_count[k]);
+	{
+		printf("%s%*s:\t%d\t%12lld\t%.2lf%%\t%19lf\n",
+			prof_labels[k],
+			(int)(longestLabel-strlen(prof_labels[k])), "",
+			prof_count[k], prof_cycles[k], 100.*prof_cycles[k]/sum, (double)prof_cycles[k]/prof_count[k]);
+	}
 	printf("\n");
 	memset(prof_cycles, 0, sizeof(prof_cycles));
 	memset(prof_count, 0, sizeof(prof_count));
@@ -86,14 +96,14 @@ int set_console_buffer_size(short w, short h)
 		printf("Failed to resize console buffer: %d\n\n", GetLastError());
 	return success;
 }
-#else
+#elif defined __linux__
 #define set_console_buffer_size(...)
 #endif
 
 int acme_print_memsize(char *buf, size_t bufsize, size_t memsize)
 {
 	if(memsize<1024)
-		return sprintf_s(buf, bufsize, "%d Bytes", memsize);
+		return sprintf_s(buf, bufsize, "%d Bytes", (int)memsize);
 	if(memsize<1024*1024)
 		return sprintf_s(buf, bufsize, "%lf KB", (double)memsize*(1./1024));
 	if(memsize<1024*1024*1024)
@@ -169,15 +179,21 @@ ArrayHandle get_filenames(const char *path, const char **extensions, int extCoun
 {
 	ArrayHandle searchpath, filename, filenames;
 	char c;
+	const char *extension;
+	ptrdiff_t len;
+	int match;
+#ifdef _MSC_VER
 	WIN32_FIND_DATAA data={0};
 	void *hSearch;
 	int success;
-	const char *extension;
-	ptrdiff_t len;
-	int found;
+#elif defined __linux__
+	DIR *d;
+	struct dirent *dir;
+#endif
 	
 	//prepare searchpath
 	searchpath=filter_path(path);
+#ifdef _MSC_VER
 	c='*';
 	STR_APPEND(searchpath, &c, 1, 1);
 
@@ -187,32 +203,56 @@ ArrayHandle get_filenames(const char *path, const char **extensions, int extCoun
 	success=FindNextFileA(hSearch, &data);//skip ..
 
 	STR_POPBACK(searchpath, 1);//pop the '*'
+#elif defined __linux__
+	d=opendir((char*)searchpath->data);
+	if(!d)
+		return 0;
+#endif
 	ARRAY_ALLOC(ArrayHandle, filenames, 0, 0, 0, free_str);
 
-	for(;success=FindNextFileA(hSearch, &data);)
+#ifdef _MSC_VER
+	while(success=FindNextFileA(hSearch, &data))
+#elif defined __linux__
+	while((dir=readdir(d)))
+#endif
 	{
-		len=strlen(data.cFileName);
-		extension=get_extension(data.cFileName, len);
-		if(!(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY))
+		const char *result;
+#ifdef _MSC_VER
+		result=data.cFileName;
+#elif defined __linux__
+		result=dir->d_name;
+		//printf("\'%s\'\n", result);//
+#endif
+		len=strlen(result);
+		extension=get_extension(result, len);
+		STR_COPY(filename, searchpath->data, searchpath->count);
+		STR_APPEND(filename, result, len, 1);
+		match=0;
+#ifdef _MSC_VER
+		if(!(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY))//not a directory
+#elif defined __linux__
+		if(file_is_readable((char*)filename->data)==1)
+#endif
 		{
-			found=0;
 			for(int k=0;k<extCount;++k)
 			{
 				if(!acme_stricmp(extension, extensions[k]))
 				{
-					found=1;
+					match=1;
 					break;
 				}
 			}
-			if(found)
-			{
-				STR_COPY(filename, searchpath->data, searchpath->count);
-				STR_APPEND(filename, data.cFileName, strlen(data.cFileName), 1);
-				ARRAY_APPEND(filenames, &filename, 1, 1, 0);
-			}
 		}
+		if(match)
+			ARRAY_APPEND(filenames, &filename, 1, 1, 0);
+		else
+			array_free(&filename);
 	}
+#ifdef _MSC_VER
 	success=FindClose(hSearch);
+#elif defined __linux__
+	closedir(d);
+#endif
 	array_free(&searchpath);
 	return filenames;
 }
@@ -278,16 +318,24 @@ void				ocl_init(const char *srcname)
 	platforms=(cl_platform_id*)malloc(nplatforms*sizeof(cl_platform_id));
 	error=p_clGetPlatformIDs(nplatforms, platforms, 0);	CL_CHECK(error);
 
-	error=p_clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, 0, 0, &ndevices);	CL_CHECK(error);
+	ndevices=0;
+	int pl_idx=0;
+	size_t retlen=0;
+	for(;pl_idx<nplatforms;++pl_idx)
+	{
+		error=p_clGetPlatformInfo(platforms[pl_idx], CL_PLATFORM_VERSION, G_BUF_SIZE, g_buf, &retlen);CL_CHECK(error);
+		error=p_clGetDeviceIDs(platforms[pl_idx], CL_DEVICE_TYPE_GPU, 0, 0, &ndevices);
+		printf("OpenCL platform: %s, %d device(s)\n", g_buf, ndevices);
+		if(ndevices)//break before pl_idx increment
+			break;
+	}
+	CL_CHECK(error);
 	ASSERT_MSG(ndevices, "No OpenCL devices");
 
 	devices=(cl_device_id*)malloc(ndevices*sizeof(cl_device_id));
-	error=p_clGetDeviceIDs(platforms[0], CL_DEVICE_TYPE_GPU, ndevices, devices, 0);	CL_CHECK(error);
+	error=p_clGetDeviceIDs(platforms[pl_idx], CL_DEVICE_TYPE_GPU, ndevices, devices, 0);	CL_CHECK(error);
 	
 	//get info
-	size_t retlen=0;
-	error=p_clGetPlatformInfo(platforms[0], CL_PLATFORM_VERSION, G_BUF_SIZE, g_buf, &retlen);CL_CHECK(error);
-	printf("OpenCL platform: %s\n", g_buf);
 	error=p_clGetDeviceInfo(devices[0], CL_DEVICE_NAME, G_BUF_SIZE, g_buf, &retlen);	CL_CHECK(error);
 	printf("Device: %s\n", g_buf);
 	error=p_clGetDeviceInfo(devices[0], CL_DEVICE_VENDOR, G_BUF_SIZE, g_buf, &retlen);	CL_CHECK(error);
@@ -598,7 +646,9 @@ typedef struct BufferStruct
 } Buffer;
 typedef struct ModelStruct
 {
+	int nepochs;
 	AugmentationType aug;
+	double lr;
 	int input_shape[4],//[B,C,W,H]
 		is_test,
 		input_idx;//index in buffers
@@ -915,7 +965,7 @@ void			skip_until(ArrayHandle text, int *ctx, char c)
 	}
 }
 #endif
-ArrayHandle		get_path(const char *filename, ArrayHandle text, int *ctx)
+ArrayHandle		get_path(const char *filename, ArrayHandle text, int *ctx, int thisOS)
 {
 	ArrayHandle ret;
 	size_t start, end;
@@ -954,15 +1004,19 @@ ArrayHandle		get_path(const char *filename, ArrayHandle text, int *ctx)
 		ret->data[ret->count-1]='\0';
 		--ret->count;
 	}
-	int result=file_is_readable((char*)ret->data);
-	ASSERT_MSG(result, "Path doesn't exist: \'%s\'", ret->data);
-	ASSERT_MSG(result==2, "Path is a file, expected a folder: \'%s\'", ret->data);
-	STR_APPEND(ret, "/", 1, 1);
+	if(thisOS)
+	{
+		int result=file_is_readable((char*)ret->data);
+		ASSERT_MSG(result, "Path doesn't exist: \'%s\'", ret->data);
+		ASSERT_MSG(result==2, "Path is a file, expected a folder: \'%s\'", ret->data);
+		STR_APPEND(ret, "/", 1, 1);
+	}
 	return ret;
 }
 
 const char
-	kw_train[]="train", kw_test[]="test",
+	kw_gpu[]="GPU", kw_cpu[]="CPU",
+	kw_train[]="train", kw_linuxtrain[]="linux_train", kw_test[]="test", kw_linuxtest[]="linux_test",
 	kw_block[]="block", kw_randcrop[]="randcrop", kw_stretch[]="stretch",
 	kw_save[]="save",
 	kw_cc[]="cc", 
@@ -974,7 +1028,8 @@ const char
 		kw_msssim[]="ms-ssim",
 	kw_weights[]="weights";
 const char
-	*ksearch_dataset[]={kw_train, kw_test},
+	*ksearch_device[]={kw_gpu, kw_cpu},
+	*ksearch_dataset[]={kw_train, kw_linuxtrain, kw_test, kw_linuxtest},
 	*ksearch_aug[]={kw_block, kw_randcrop, kw_stretch},
 	*ksearch_global[]={kw_cc, kw_conv, kw_save, kw_quantize, kw_loss},
 	*ksearch_nl[]={kw_lrelu, kw_relu},
@@ -1354,25 +1409,81 @@ size_t parse_model(const char *filename, Model* model)
 	if(!text)
 		LOG_ERROR("Cannot open \'%s\'\n", filename);
 
+	skip_ws(text, ctx);
+	match=match_kw(text, ctx, ksearch_device, COUNTOF(ksearch_device));
+	switch(match)
+	{
+	case -1:
+		LOG_ERROR("%s(%d): Expected \'GPU\' or \'CPU\'", filename, ctx[1]);
+		break;
+	case 0:
+		using_gpu=1;
+		ocl_init("cl_kernels.h");
+		PROF(COMPILE);
+		break;
+	case 1:
+		using_gpu=0;
+		break;
+	}
+
+	skip_ws(text, ctx);
+	parse_number(filename, text, ctx, 10, &fval);
+	model->nepochs=(int)round(fval);
+
+	skip_ws(text, ctx);
+	parse_number(filename, text, ctx, 10, &model->lr);
+
+	skip_ws(text, ctx);
+	parse_number(filename, text, ctx, 10, &fval);
+	model->input_shape[0]=(int)round(fval);
+
 	model->trainpath=0;
 	model->testpath=0;
-	for(int k=0;k<2;++k)
+	for(int k=0;k<4;++k)
 	{
+		ArrayHandle temppath;
 		skip_ws(text, ctx);
 		match=match_kw(text, ctx, ksearch_dataset, COUNTOF(ksearch_dataset));
 		switch(match)
 		{
 		case -1:
-			LOG_ERROR("%s(%d): Expected \'train\' or \'test\'", filename, ctx[1]);
-		case 0:
-			ASSERT_MSG(!model->trainpath, "Train path already encountered");
-			skip_ws(text, ctx);
-			model->trainpath=get_path(filename, text, ctx);
+			LOG_ERROR("%s(%d): Expected \'train\', \'linux_train\', \'test\' or \'linux_test\'", filename, ctx[1]);
 			break;
+		case 0:
 		case 1:
-			ASSERT_MSG(!model->testpath, "Test path already encountered");
+		case 2:
+		case 3:
+			ASSERT_MSG(match<2?!model->trainpath:!model->testpath, "%s path already encountered", match<2?"Train":"Test");
 			skip_ws(text, ctx);
-			model->testpath=get_path(filename, text, ctx);
+#ifndef _MSC_VER//if linux
+			match^=1;//swap 1 with 0, swap 3 with 2
+#endif
+			temppath=get_path(filename, text, ctx, !(match&1));
+			
+			switch(match)
+			{
+			case 0:
+				model->trainpath=temppath;
+				break;
+			case 2:
+				model->testpath=temppath;
+				break;
+			default:
+				array_free(&temppath);
+			}
+//#ifdef _MSC_VER
+//			if(match==0||match==2)
+//#elif defined __linux__
+//			if(match==1||match==3)
+//#endif
+//			{
+//				if(match<2)
+//					model->trainpath=temppath;
+//				else
+//					model->testpath=temppath;
+//			}
+//			else
+//				array_free(&temppath);
 			break;
 		}
 	}
@@ -1461,10 +1572,13 @@ size_t parse_model(const char *filename, Model* model)
 	if(memusage>0x7FFFFFFF)
 	{
 		printf(", continue? [Y/N] ");
-		char c=0;
-		scanf(" %c", &c);
-		if((c&0xDF)!='Y')
-			exit(0);
+		char c=0, count;
+		do
+		{
+			count=scanf(" %c", &c);
+			if((c&0xDF)!='Y')
+				exit(0);
+		}while(!count);
 	}
 	else
 		printf("\n");
@@ -1669,7 +1783,7 @@ void save_model(Model* model, int incremental, double loss)
 #ifdef _MSC_VER
 		struct tm t_formatted={0}, *ts=&t_formatted;
 		int error=localtime_s(ts, &t_now);
-#else
+#elif defined __linux__
 		struct tm *ts=localtime(&t_now);
 #endif
 		printed=sprintf_s(g_buf, G_BUF_SIZE, "model-%04d%02d%02d-%02d%02d%02d-rmse%lf.txt", 1900+ts->tm_year, 1+ts->tm_mon, ts->tm_mday, ts->tm_hour, ts->tm_min, ts->tm_sec, loss);
@@ -2153,15 +2267,16 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 	return warp;
 }
 #ifdef _MSC_VER
-DWORD __stdcall LoaderProc(void *param)
+DWORD __stdcall
+#elif defined __linux__
+void*
+#endif
+	LoaderProc(void *param)
 {
 	LoaderParams *p=(LoaderParams*)param;
 	p->epoch_inc=load_data(p->path, p->filenames, p->kim, p->kblock, p->model);
 	return 0;
 }
-#else
-#error TODO
-#endif
 void send_input(Model *model)
 {
 	Buffer *input=(Buffer*)array_at(&model->buffers, model->input_idx);
@@ -2176,6 +2291,33 @@ void send_input(Model *model)
 		for(int k=0;k<isize;++k)//cast to double
 			input->data[k]=model->input[k];
 	}
+}
+#ifdef _MSC_VER
+DWORD threadId=0;
+HANDLE hThread=0;
+#elif defined __linux__
+pthread_t threadId=0;
+#endif
+void loader_start(LoaderParams *lp)
+{
+	int error=0;
+#ifdef _MSC_VER
+	hThread=CreateThread(0, 0, LoaderProc, lp, 0, &threadId);
+	error=!hThread;
+#elif defined __linux__
+	error=pthread_create(&threadId, 0, LoaderProc, lp);
+#endif
+	ASSERT_MSG(!error, "Failed to create loader thread (%d)", error);
+}
+void loader_waitfinish(Model *model)
+{
+#ifdef _MSC_VER
+	WaitForSingleObject(hThread, INFINITE);
+	CloseHandle(hThread);
+#elif defined __linux__
+	pthread_join(threadId, 0);
+#endif
+	send_input(model);
 }
 
 typedef struct ConvInfoStruct//68 bytes
@@ -2664,18 +2806,18 @@ ConvInfo cpu_indices={0};
 AdamInfo adam_params={0};
 #endif
 
-typedef enum CMDArgsEnum
-{
-	ARG_PROGRAM,
-
-	ARG_DEVICE,
-	ARG_EPOCHS,
-	ARG_LR,
-	ARG_BATCHSIZE,
-	ARG_MODEL,
-
-	ARG_COUNT,
-} CMDArgs;
+//typedef enum CMDArgsEnum
+//{
+//	ARG_PROGRAM,
+//
+//	ARG_DEVICE,
+//	ARG_EPOCHS,
+//	ARG_LR,
+//	ARG_BATCHSIZE,
+//	ARG_MODEL,
+//
+//	ARG_COUNT,
+//} CMDArgs;
 int main(int argc, char **argv)
 {
 	set_console_buffer_size(120, 2000);
@@ -2683,8 +2825,21 @@ int main(int argc, char **argv)
 	
 	//automatic differentiation in 2D
 #if 1
-	printf(
-		"ACME-ML\t\tbuild %s %s\n", __DATE__, __TIME__);
+	printf("ACME-ML\t\tbuild %s %s\n", __DATE__, __TIME__);
+	if(argc>2)
+	{
+		printf(
+			"Usage:\n"
+			"  program  [modelName.txt]\n"
+			"If model name is not given, will attempt to load the incremental \'model.txt\'\n"
+			"\n"
+		);
+#ifdef _MSC_VER
+		pause();
+#endif
+		return 1;
+	}
+#if 0
 	if(argc!=ARG_COUNT-1&&argc!=ARG_COUNT)
 	{
 		printf(
@@ -2700,8 +2855,10 @@ int main(int argc, char **argv)
 #endif
 		return 1;
 	}
+#endif
 	int error;
 	PROF_INIT();
+#if 0
 	if(!strcmp(argv[ARG_DEVICE], "GPU"))
 	{
 		using_gpu=1;
@@ -2716,6 +2873,7 @@ int main(int argc, char **argv)
 #endif
 		return 1;
 	}
+#endif
 
 	//cc test
 #if 0
@@ -2768,10 +2926,10 @@ int main(int argc, char **argv)
 		exit(0);
 	}
 #endif
-	int epoch=atoi(argv[ARG_EPOCHS]);
-	double lr=atof(argv[ARG_LR]);
-	model.input_shape[0]=atoi(argv[ARG_BATCHSIZE]);//Batch size
-	int nallocs=(int)parse_model(argc==ARG_MODEL?"model.txt":argv[ARG_MODEL], &model);
+	//int epoch=atoi(argv[ARG_EPOCHS]);
+	//double lr=atof(argv[ARG_LR]);
+	//model.input_shape[0]=atoi(argv[ARG_BATCHSIZE]);//Batch size
+	int nallocs=(int)parse_model(argc==1?"model.txt":argv[1], &model);
 	PROF(PARSE);
 
 	//for(int k=0;k<model.buffers->count;++k)
@@ -2810,7 +2968,7 @@ int main(int argc, char **argv)
 	pause();
 #endif
 
-	printf("%d buffers\n%lld parameters, %d layers\n%d epochs, lr=%g, batchSize=%d\n", nallocs, model.nparams, nlayers, epoch, lr, model.input_shape[0]);
+	printf("%d buffers\n%d parameters, %d layers\n%d epochs, lr=%g, batchSize=%d\n", nallocs, (int)model.nparams, nlayers, model.nepochs, model.lr, model.input_shape[0]);
 	//lr/=model.input_shape[0];
 
 	//read dataset directory
@@ -2858,11 +3016,14 @@ int main(int argc, char **argv)
 			}
 		}
 	}
-	double min_loss=_HUGE;
+	double min_loss=
+#ifdef _MSC_VER
+		_HUGE;
+#elif defined __linux__
+		HUGE_VAL;
+#endif
 	timestamp1=time_ms();
 	PROF(INIT);
-	DWORD threadId=0;
-	HANDLE hThread=0;
 	LoaderParams lp=
 	{
 		(char*)model.trainpath->data,
@@ -2870,17 +3031,12 @@ int main(int argc, char **argv)
 		&kim, &kblock,
 		&model
 	};
-	hThread=CreateThread(0, 0, LoaderProc, &lp, 0, &threadId);
-	ASSERT_MSG(hThread, "Failed to create loader thread");
-
-	WaitForSingleObject(hThread, INFINITE);
-	CloseHandle(hThread);
-	send_input(&model);
+	loader_start(&lp);
+	loader_waitfinish(&model);
 	for(;;)//training loop
 	{
 		//load data start
-		hThread=CreateThread(0, 0, LoaderProc, &lp, 0, &threadId);
-		ASSERT_MSG(hThread, "Failed to create loader thread");
+		loader_start(&lp);
 		//int epoch_inc=load_data((char*)model.trainpath->data, filenames, &kim, &kblock, &model);
 		PROF(LOAD);
 
@@ -2986,7 +3142,7 @@ int main(int argc, char **argv)
 			}
 #endif
 			PROF(BWD);
-			adam_params.lr=(float)lr;
+			adam_params.lr=(float)model.lr;
 			adam_params.beta1=(float)beta1;
 			adam_params.beta2=(float)beta2;
 			adam_params.epsilon=(float)epsilon;
@@ -3119,7 +3275,7 @@ int main(int argc, char **argv)
 				double
 					mhat=((double*)model.cpu_adam_m->data)[k]*gain1,
 					vhat=((double*)model.cpu_adam_v->data)[k]*gain2;
-				((double*)model.cpu_params->data)[k]-=lr*mhat/(sqrt(vhat)+epsilon);
+				((double*)model.cpu_params->data)[k]-=model.lr*mhat/(sqrt(vhat)+epsilon);
 			}
 			PROF(OPT);
 		}
@@ -3150,7 +3306,7 @@ int main(int argc, char **argv)
 			}
 			printf("\n");
 
-			if(ke>=epoch)
+			if(ke>=model.nepochs)
 				break;
 			
 			av_loss=0, nbatches=0;
@@ -3160,9 +3316,7 @@ int main(int argc, char **argv)
 		}
 
 		//load data end
-		WaitForSingleObject(hThread, INFINITE);
-		CloseHandle(hThread);
-		send_input(&model);
+		loader_waitfinish(&model);
 	}
 
 	save_model(&model, 0, av_loss);
