@@ -11,9 +11,10 @@ CLKERNEL(relu)
 CLKERNEL(relu_grad)
 
 CLKERNEL(quantizer_train)
+CLKERNEL(quantizer_grad)
 CLKERNEL(quantizer_test)
-CLKERNEL(loss_MSE)
 
+CLKERNEL(loss_MSE)
 CLKERNEL(opt_adam)
 
 #endif

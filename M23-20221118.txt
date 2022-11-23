@@ -1,25 +1,30 @@
 //20221121Mo
-train	"E:/ML/dataset-AWM"
-test	"E:/ML/dataset-kodak"
+//	train	"E:/ML/dataset-flicker_2W"
+	train	"E:/ML/dataset-AWM"
+	test	"E:/ML/dataset-kodak"
 
 //20221118Fr
 
 //opened image is partitioned to 2D blocks of 64x64
+//block2 64x64
+//opened image is stretched to 64x64
 stretch2 64x64
 
 //x = batch of such blocks
 save x
 
 //cross-correlation in 2D, Cin=3, Cout=64, kernel=3x3, stride=1, pad=1, leaky ReLU activation
+//cc2  3  3 3x3 1 1 lrelu		//simple layer
 cc2  3 64 3x3 1 1 lrelu
 cc2 64 64 3x3 1 1 lrelu
 cc2 64 64 3x3 1 1 lrelu
 cc2 64  3 3x3 1 1 lrelu
 
-//quantize 16	//quantization levels (train: add noise, test actual quantizer)
+quantize 256	//quantization levels (train: add noise, test actual quantizer)
 
 save y
 
+//cc2  3  3 3x3 1 1 lrelu
 cc2  3 64 3x3 1 1 lrelu
 cc2 64 64 3x3 1 1 lrelu
 cc2 64 64 3x3 1 1 lrelu

@@ -549,7 +549,7 @@ typedef struct ModelStruct
 		input;//index in buffers
 	ArrayHandle
 		src,				//string with the model source code, for saving
-		testpath, trainpath,//strings with paths to datasets
+		trainpath, testpath,//strings with paths to datasets
 		instructions,	//array of Instruction
 		buffers;		//array of Buffer/cl_mem, depending on using_gpu
 	size_t nparams;
@@ -585,6 +585,8 @@ void free_model(void *p)
 {
 	Model *model=(Model*)p;
 	array_free(&model->src);
+	array_free(&model->trainpath);
+	array_free(&model->testpath);
 	array_free(&model->instructions);
 	array_free(&model->buffers);
 	if(using_gpu)
@@ -602,6 +604,8 @@ void free_model(void *p)
 		array_free(&model->cpu_grad);
 		array_free(&model->cpu_params);
 	}
+	free(model->gpu_input);
+	free(model->gpu_output);
 }
 typedef struct VariableStruct
 {
@@ -614,7 +618,42 @@ void free_variable(void *p)
 	array_free(&var->name);
 }
 
-void preview_cl_buffer(Buffer *buf, cl_mem clbuf, size_t offset, size_t bufsize)
+void preview_cpu_buf(Buffer *buf, Model *model, const char *name)
+{
+	double *ptr=0;
+	switch(buf->type)
+	{
+	case BUF_NORMAL:
+	case BUF_NORMAL_SAVED:
+		ptr=buf->data;
+		break;
+	case BUF_PARAM:
+		ptr=(double*)model->cpu_params->data+buf->offset;
+		break;
+	case BUF_GRAD:
+		ptr=(double*)model->cpu_grad->data+buf->offset;
+		break;
+	}
+	if(name)
+		printf("BUFFER %s:\n", name);
+	for(int kb=0;kb<buf->shape[0];++kb)
+	{
+		for(int kc=0;kc<buf->shape[1];++kc)
+		{
+			printf("B %d C %d:\n", kb, kc);
+			for(int ky=0;ky<buf->shape[2];++ky)
+			{
+				for(int kx=0;kx<buf->shape[3];++kx)
+					printf("%g\t", ptr[buf->shape[3]*(buf->shape[2]*(buf->shape[1]*kb+kc)+ky)+kx]);
+				printf("\n");
+			}
+			printf("\n");
+		}
+		printf("\n");
+		//break;//
+	}
+}
+void preview_gpu_buffer(Buffer *buf, cl_mem clbuf, size_t offset, size_t bufsize)
 {
 	size_t size=bufsize?bufsize:buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
 	float *buffer=(float*)malloc(size*sizeof(float));
@@ -1027,7 +1066,7 @@ void parse_conv(const char *filename, ArrayHandle text, int *ctx, Model* model, 
 	inst[1].fwd_args[0]=nbuffers+4;		//net
 	inst[1].fwd_result=nbuffers+6;		//x2
 	inst[1].bwd_args[0]=nbuffers+7;		//dL_dx2
-	inst[1].bwd_args[1]=nbuffers+6;		//x2
+	inst[1].bwd_args[1]=nbuffers+4;		//net
 	inst[1].bwd_results[0]=nbuffers+5;	//dL_dnet
 }
 void parse_save(const char *filename, ArrayHandle text, int *ctx, Model* model, ArrayHandle *variables)
@@ -1077,45 +1116,48 @@ void parse_quantize(const char *filename, ArrayHandle text, int *ctx, Model* mod
 	ASSERT_MSG(inst->info[0]>1, "Quantization nlevels should be greater than 1, got %d", inst->info[0]);
 
 	int nbuffers=(int)model->buffers->count;
-	buffer=(Buffer*)ARRAY_APPEND(model->buffers, 0, 1+(first_inst<<1), 1, 0);
-	int x_idx, dLdx_idx;
+	buffer=(Buffer*)ARRAY_APPEND(model->buffers, 0, 2+(first_inst<<1), 1, 0);
+	int in_idx, dLdin_idx;
 	if(first_inst)
 	{
-		x_idx=nbuffers+1;
-		dLdx_idx=nbuffers+2;
+		in_idx=nbuffers+1;
+		dLdin_idx=nbuffers+2;
 	}
 	else
 	{
-		x_idx=inst[-1].fwd_result;
-		dLdx_idx=inst[-1].bwd_args[0];
+		in_idx=inst[-1].fwd_result;
+		dLdin_idx=inst[-1].bwd_args[0];
 	}
 	Buffer
-		*x=(Buffer*)array_at(&model->buffers, x_idx),
-		*dL_dx=(Buffer*)array_at(&model->buffers, dLdx_idx),
-		*xhat=buffer;
+		*in=(Buffer*)array_at(&model->buffers, in_idx),
+		*dL_din=(Buffer*)array_at(&model->buffers, dLdin_idx),
+		*out=buffer, *dL_dout=buffer+1;
 	if(first_inst)
 	{
-		x->shape[0]=model->input_shape[0];//B
-		x->shape[1]=model->input_shape[1];//FIXME: Cin is unknown if quantizer appears first
-		x->shape[2]=model->input_shape[2];
-		x->shape[3]=model->input_shape[3];
-		x->type=BUF_NORMAL;//not a param
-		memcpy(dL_dx->shape, x->shape, sizeof(x->shape));
-		dL_dx->type=BUF_NORMAL;
+		in->shape[0]=model->input_shape[0];//B
+		in->shape[1]=model->input_shape[1];//FIXME: Cin is unknown if quantizer appears first
+		in->shape[2]=model->input_shape[2];
+		in->shape[3]=model->input_shape[3];
+		in->type=BUF_NORMAL;//not a param
+		memcpy(dL_din->shape, in->shape, sizeof(in->shape));
+		dL_din->type=BUF_NORMAL;
 		for(int k=0;k<(int)variables->count;++k)
 		{
 			Variable *var=(Variable*)array_at(&variables, k);
 			if(var->buffer==-1)
-				var->buffer=x_idx;
+				var->buffer=in_idx;
 		}
 	}
-	memcpy(xhat->shape, x->shape, sizeof(x->shape));
-	xhat->type=BUF_NORMAL;
+	memcpy(out->shape, in->shape, sizeof(in->shape));
+	out->type=BUF_NORMAL;
+	memcpy(dL_dout->shape, in->shape, sizeof(in->shape));
+	dL_dout->type=BUF_NORMAL;
 
-	inst->fwd_args[0]=x_idx;
-	inst->fwd_result=nbuffers;
-	inst->bwd_args[0]=dLdx_idx;//should be dL_dxhat, but quantizer.bwd is identity
-	inst->bwd_results[0]=dLdx_idx;
+	inst->fwd_args[0]=in_idx;
+	inst->fwd_result=nbuffers;		//out
+	inst->bwd_args[0]=nbuffers+1;	//dL_dout
+	inst->bwd_args[1]=in_idx;		//in
+	inst->bwd_results[0]=dLdin_idx;
 }
 int match_varname(const char *varname, int len, ArrayHandle variables)
 {
@@ -1130,7 +1172,6 @@ int match_varname(const char *varname, int len, ArrayHandle variables)
 void parse_loss(const char *filename, ArrayHandle text, int *ctx, Model* model, ArrayHandle variables)
 {
 	Instruction *inst;
-	Buffer *buffer;
 	int start;
 	
 	ASSERT_MSG(model->instructions->count, "%s(%d): Loss cannot be the first operation", filename, *ctx);
@@ -1163,23 +1204,36 @@ void parse_loss(const char *filename, ArrayHandle text, int *ctx, Model* model, 
 	int b2=match_varname(text->data+start, *ctx-start, variables);
 	ASSERT_MSG(b2!=-1, "%s(%d): Undeclared identifier \'%.*s\'", filename, ctx[1], *ctx-start, text->data+start);
 	
-	int nbuffers=(int)model->buffers->count;
-	buffer=(Buffer*)ARRAY_APPEND(model->buffers, 0, 1, 1, 0);//diff
-
+	//for(int ki=(int)model->instructions->count-1;ki>=0;--ki)
+	//{
+	//	Instruction *instr=(Instruction*)array_at(&model->instructions, ki);
+	//}
+	//int nbuffers=(int)model->buffers->count;
+	//buffer=(Buffer*)ARRAY_APPEND(model->buffers, 0, 1, 1, 0);//diff
+	
+	ASSERT_MSG(model->instructions->count>1, "%s(%d): Can't apply loss here", filename, ctx[1]);
+	//inst2=(Instruction*)array_at(&model->instructions, model->instructions->count-2);
 	Buffer
 		*buf1=(Buffer*)array_at(&model->buffers, b1),
 		*buf2=(Buffer*)array_at(&model->buffers, b2),
-		*diff=buffer;
-	ASSERT_MSG(!memcmp(buf1->shape, buf2->shape, sizeof(buf2->shape)),
-		"%s(%d): Loss function expects two buffers of identical shape, got [%d %d %d %d] and [%d %d %d %d]", filename, ctx[1],
-		buf1->shape[0], buf1->shape[1], buf1->shape[2], buf1->shape[3], buf2->shape[0], buf2->shape[1], buf2->shape[2], buf2->shape[3]);
-	memcpy(diff->shape, buf1->shape, sizeof(buf1->shape));
-	diff->type=BUF_NORMAL;
+		*diff=(Buffer*)array_at(&model->buffers, inst[-1].bwd_args[0]);
 
+	ASSERT_MSG(!memcmp(buf1->shape, buf2->shape, sizeof(buf2->shape)),
+		"%s(%d): Loss function expects two buffers of identical shape, got xhat=[%d %d %d %d] and x=[%d %d %d %d]", filename, ctx[1],
+		buf1->shape[0], buf1->shape[1], buf1->shape[2], buf1->shape[3], buf2->shape[0], buf2->shape[1], buf2->shape[2], buf2->shape[3]);
+
+	ASSERT_MSG(!memcmp(buf1->shape, diff->shape, sizeof(diff->shape)),
+		"%s(%d): Loss function result is of different shape xhat=[%d %d %d %d] and diff=[%d %d %d %d]", filename, ctx[1],
+		buf1->shape[0], buf1->shape[1], buf1->shape[2], buf1->shape[3], diff->shape[0], diff->shape[1], diff->shape[2], diff->shape[3]);
+	//memcpy(diff->shape, buf1->shape, sizeof(buf1->shape));
+	//diff->type=BUF_NORMAL;
+	
 	inst->fwd_args[0]=b1;
 	inst->fwd_args[1]=b2;
-	inst->fwd_result=nbuffers;
-	inst->bwd_results[0]=nbuffers;
+	inst->bwd_results[0]=inst->fwd_result=inst[-1].bwd_args[0];
+
+	//inst->fwd_result=nbuffers;
+	//inst->bwd_results[0]=nbuffers;
 }
 void init_model(Model* model)
 {
@@ -1191,6 +1245,9 @@ void init_model(Model* model)
 	size_t kp=0;
 	ArrayHandle temp=0;
 	int error;
+
+	srand((int)__rdtsc());
+
 	if(using_gpu)
 		ARRAY_ALLOC(float, temp, 0, model->nparams, 0, 0);
 	for(int kb=0;kb<(int)model->buffers->count;++kb)
@@ -1227,7 +1284,7 @@ void init_model(Model* model)
 		error=p_clEnqueueWriteBuffer(commandqueue, model->gpu_params, CL_TRUE, 0, model->nparams*sizeof(float), temp->data, 0, 0, 0);	CL_CHECK(error);
 		array_free(&temp);
 #if 0
-		preview_cl_buffer(0, model->gpu_params, 0, model->nparams);//
+		preview_gpu_buffer(0, model->gpu_params, 0, model->nparams);//
 #endif
 	}
 }
@@ -1344,7 +1401,7 @@ size_t parse_model(const char *filename, Model* model)
 		memusage+=bufsize;
 	}
 	acme_print_memsize(g_buf, G_BUF_SIZE, memusage);
-	printf("Allocating %s of %s memory", g_buf, using_gpu?"GPU":"CPU");
+	printf("\nAllocating %s of %s memory", g_buf, using_gpu?"GPU":"CPU");
 	if(memusage>0x7FFFFFFF)
 	{
 		printf(", continue? [Y/N] ");
@@ -1409,13 +1466,35 @@ size_t parse_model(const char *filename, Model* model)
 	memusage+=4;
 
 	skip_ws(text, ctx);
-	if(!match_kw(text, ctx, (const char**)&kw_weights, 1))
+	const char *kw=kw_weights;
+	if(!match_kw(text, ctx, (const char**)&kw, 1))
 	{
+		float *params=0;
+		if(using_gpu)
+			params=(float*)malloc(model->nparams*sizeof(float));
 		for(size_t k=0;k<nParams;++k)
 		{
-			double *param=(double*)array_at(&model->cpu_params, k);
+			double param;
 			skip_ws(text, ctx);
-			parse_number(filename, text, ctx, 16, param);
+			ASSERT_MSG(*ctx<text->count, "%s(%d): Not enough params in file", filename, ctx[1]);
+			parse_number(filename, text, ctx, 10, &param);
+			if(using_gpu)
+#ifdef FIXED_PREC
+				((int*)params)[k]=(int)(param*0x10000);
+#else
+				params[k]=(float)param;
+#endif
+			else
+			{
+				double *val=(double*)array_at(&model->cpu_params, k);
+				*val=param;
+			}
+		}
+		if(using_gpu)
+		{
+			error=p_clEnqueueWriteBuffer(commandqueue, model->gpu_params, CL_TRUE, 0, model->nparams*sizeof(float), params, 0, 0, 0);
+			CL_CHECK(error);
+			free(params);
 		}
 	}
 	else
@@ -1459,7 +1538,7 @@ size_t parse_model(const char *filename, Model* model)
 	return memusage;
 }
 
-int print_fhex(char *buf, size_t len, double x)
+int print_float(char *buf, size_t len, double x, int base)
 {
 	int idx=0;
 
@@ -1484,9 +1563,9 @@ int print_fhex(char *buf, size_t len, double x)
 	unsigned long long llx=(unsigned long long)fx;
 	while(llx)
 	{
-		buf[idx]=llx&15;
-		buf[idx]+=buf[idx]<10?'0':'A';
-		llx>>=4;
+		buf[idx]=(char)(llx%base);
+		buf[idx]+=buf[idx]<10?'0':'A'-10;
+		llx/=base;
 		++idx;
 	}
 	if(start<idx)//reverse the digits
@@ -1510,7 +1589,7 @@ int print_fhex(char *buf, size_t len, double x)
 		++idx;
 		for(int k=0;k<12&&x;++k)
 		{
-			x*=16;
+			x*=base;
 			int digit=(int)floor(x);
 			x-=digit;
 			buf[idx]=digit+(digit<10?'0':'A'-10);
@@ -1572,7 +1651,7 @@ void save_model(Model* model, int incremental, double loss)
 #else
 								double val=gpu_params[kp];
 #endif
-								printed=print_fhex(g_buf, G_BUF_SIZE, val);
+								printed=print_float(g_buf, G_BUF_SIZE, val, 10);
 								STR_APPEND(text, "\t", 1, 1);
 								STR_APPEND(text, g_buf, printed, 1);
 							}
@@ -1582,7 +1661,7 @@ void save_model(Model* model, int incremental, double loss)
 							for(int k3=0;k3<buf->shape[3];++k3, ++kp)
 							{
 								double *val=(double*)array_at(&model->cpu_params, kp);
-								printed=print_fhex(g_buf, G_BUF_SIZE, *val);
+								printed=print_float(g_buf, G_BUF_SIZE, *val, 10);
 								STR_APPEND(text, "\t", 1, 1);
 								STR_APPEND(text, g_buf, printed, 1);
 							}
@@ -1596,13 +1675,6 @@ void save_model(Model* model, int incremental, double loss)
 			//STR_APPEND(text, "\n", 1, 1);
 		}
 	}
-	//for(size_t k=0;k<model->params->count;++k)
-	//{
-	//	double *val=(double*)array_at(&model->params, k);
-	//	printed=print_fhex(g_buf, G_BUF_SIZE, *val);
-	//	STR_APPEND(text, "\n", 1, 1);
-	//	STR_APPEND(text, g_buf, printed, 1);
-	//}
 	if(using_gpu)
 		free(gpu_params);
 
@@ -2034,25 +2106,47 @@ void fill_indices(Model *model, int ki, int ke, int qlevels, ConvInfo *cpu_indic
 		*buffilt=(Buffer*)array_at(&model->buffers, inst->fwd_args[1]),
 		*bufbias=(Buffer*)array_at(&model->buffers, inst->fwd_args[2]),
 		*bufnet	=(Buffer*)array_at(&model->buffers, inst->fwd_result);
-	cpu_indices->B		=bufin->shape[0];
-	cpu_indices->Ci		=bufin->shape[1];
-	cpu_indices->Hi		=bufin->shape[2];
-	cpu_indices->Wi		=bufin->shape[3];
-	cpu_indices->Co		=buffilt->shape[0];
-	cpu_indices->Kh		=buffilt->shape[2];
-	cpu_indices->Kw		=buffilt->shape[3];
-	cpu_indices->xpad	=inst->info[0];
-	cpu_indices->ypad	=inst->info[1];
-	cpu_indices->xstride=inst->info[2];
-	cpu_indices->ystride=inst->info[3];
-	cpu_indices->Ho		=bufnet->shape[2];
-	cpu_indices->Wo		=bufnet->shape[3];
-	cpu_indices->weight	=(int)buffilt->offset;
-	cpu_indices->bias	=(int)bufbias->offset;
-	cpu_indices->epoch	=ke;
-	cpu_indices->qlevels=qlevels;
-	int error=p_clEnqueueWriteBuffer(commandqueue, gpu_indices, CL_TRUE, 0, sizeof(*cpu_indices), cpu_indices, 0, 0, 0);
-	CL_CHECK(error);
+	int modified=0;
+#define ASSIGN(ATTR, VAL)	if(cpu_indices->ATTR!=VAL)cpu_indices->ATTR=VAL, modified=1
+	ASSIGN(B, bufin->shape[0]);
+	ASSIGN(Ci, bufin->shape[1]);
+	ASSIGN(Hi, bufin->shape[2]);
+	ASSIGN(Wi, bufin->shape[3]);
+	ASSIGN(Co, buffilt->shape[0]);
+	ASSIGN(Kh, buffilt->shape[2]);
+	ASSIGN(Kw, buffilt->shape[3]);
+	ASSIGN(xpad, inst->info[0]);
+	ASSIGN(ypad, inst->info[1]);
+	ASSIGN(xstride, inst->info[2]);
+	ASSIGN(ystride, inst->info[3]);
+	ASSIGN(Ho, bufnet->shape[2]);
+	ASSIGN(Wo, bufnet->shape[3]);
+	ASSIGN(weight, (int)buffilt->offset);
+	ASSIGN(bias, (int)bufbias->offset);
+	ASSIGN(epoch, ke);
+	ASSIGN(qlevels, qlevels);
+	//cpu_indices->B		=bufin->shape[0];
+	//cpu_indices->Ci		=bufin->shape[1];
+	//cpu_indices->Hi		=bufin->shape[2];
+	//cpu_indices->Wi		=bufin->shape[3];
+	//cpu_indices->Co		=buffilt->shape[0];
+	//cpu_indices->Kh		=buffilt->shape[2];
+	//cpu_indices->Kw		=buffilt->shape[3];
+	//cpu_indices->xpad	=inst->info[0];
+	//cpu_indices->ypad	=inst->info[1];
+	//cpu_indices->xstride=inst->info[2];
+	//cpu_indices->ystride=inst->info[3];
+	//cpu_indices->Ho		=bufnet->shape[2];
+	//cpu_indices->Wo		=bufnet->shape[3];
+	//cpu_indices->weight	=(int)buffilt->offset;
+	//cpu_indices->bias	=(int)bufbias->offset;
+	//cpu_indices->epoch	=ke;
+	//cpu_indices->qlevels=qlevels;
+	if(modified)
+	{
+		int error=p_clEnqueueWriteBuffer(commandqueue, gpu_indices, CL_TRUE, 0, sizeof(*cpu_indices), cpu_indices, 0, 0, 0);
+		CL_CHECK(error);
+	}
 }
 
 typedef struct ResultCtxStruct
@@ -2073,7 +2167,7 @@ void result_save(ResultCtx *res, double loss, int idx)
 		sprintf_s(g_buf, G_BUF_SIZE, "%04d%02d%02d-%02d%02d%02d-%d.PNG", 1900+info->tm_year, 1+info->tm_mon, info->tm_mday, info->tm_hour, info->tm_min, info->tm_sec, idx);
 	else
 		sprintf_s(g_buf, G_BUF_SIZE, "%04d%02d%02d-%02d%02d%02d-RMSE%lf.PNG", 1900+info->tm_year, 1+info->tm_mon, info->tm_mday, info->tm_hour, info->tm_min, info->tm_sec, loss);
-	lodepng_encode_file(g_buf, res->rgb, res->nsaves*res->bcountx*res->bsizex, res->bcounty*res->bsizey, LCT_RGBA, 8);
+	lodepng_encode_file(g_buf, (unsigned char*)res->rgb, res->nsaves*res->bcountx*res->bsizex, res->bcounty*res->bsizey, LCT_RGBA, 8);
 }
 int result_add(ResultCtx *res, Buffer *buf, int idx, int using_gpu, int force_save_loss)
 {
@@ -2190,16 +2284,16 @@ double forward_gpu(Model *model, int is_test, int ke, int qlevels, ConvInfo *cpu
 				error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &model->gpu_params);	CL_CHECK(error);
 				error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &bufnet->gpu_buf);	CL_CHECK(error);
 				error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
-				p_clFlush(commandqueue);
-				p_clFinish(commandqueue);
+				error=p_clFlush(commandqueue);	CL_CHECK(error);
+				error=p_clFinish(commandqueue);	CL_CHECK(error);
 
 				if(is_test)
 					saveidx+=result_add(result, bufnet, saveidx, 1, 0);
 
-				//preview_cl_buffer(bufin, 0, 0, 0);
-				//preview_cl_buffer(buffilt, model->gpu_params, cpu_indices.weight, 0);
-				//preview_cl_buffer(buffilt, model->gpu_params, cpu_indices.bias, 0);
-				//preview_cl_buffer(bufnet, 0, 0, 0);
+				//preview_gpu_buffer(bufin, 0, 0, 0);
+				//preview_gpu_buffer(buffilt, model->gpu_params, cpu_indices.weight, 0);
+				//preview_gpu_buffer(buffilt, model->gpu_params, cpu_indices.bias, 0);
+				//preview_gpu_buffer(bufnet, 0, 0, 0);
 #if 0
 				{
 					float *buffer=(float*)malloc(osize*sizeof(float));
@@ -2248,8 +2342,8 @@ double forward_gpu(Model *model, int is_test, int ke, int qlevels, ConvInfo *cpu
 				error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufin->gpu_buf);		CL_CHECK(error);
 				error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &bufout->gpu_buf);	CL_CHECK(error);
 				error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
-				p_clFlush(commandqueue);
-				p_clFinish(commandqueue);
+				error=p_clFlush(commandqueue);	CL_CHECK(error);
+				error=p_clFinish(commandqueue);	CL_CHECK(error);
 
 				if(is_test)
 					saveidx+=result_add(result, bufout, saveidx, 1, 0);
@@ -2269,8 +2363,8 @@ double forward_gpu(Model *model, int is_test, int ke, int qlevels, ConvInfo *cpu
 				error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &buf2->gpu_buf);		CL_CHECK(error);
 				error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &bufdiff->gpu_buf);	CL_CHECK(error);
 				error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
-				p_clFlush(commandqueue);
-				p_clFinish(commandqueue);
+				error=p_clFlush(commandqueue);	CL_CHECK(error);
+				error=p_clFinish(commandqueue);	CL_CHECK(error);
 
 				if(is_test)
 					saveidx+=result_add(result, bufdiff, saveidx, 1, 1);
@@ -2318,7 +2412,7 @@ double forward_cpu(Model *model, int is_test, ResultCtx *result)
 	{
 		inst=(Instruction*)array_at(&model->instructions, 0);
 		Buffer *input=(Buffer*)array_at(&model->buffers, inst->fwd_args[0]);
-		saveidx+=result_add(result, input, saveidx, 1, 0);
+		saveidx+=result_add(result, input, saveidx, 0, 0);
 	}
 	for(int ki=0;ki<(int)model->instructions->count;++ki)
 	{
@@ -2395,6 +2489,8 @@ double forward_cpu(Model *model, int is_test, ResultCtx *result)
 				ASSERT_MSG(src->type==BUF_NORMAL||src->type==BUF_NORMAL_SAVED, "LReLU cannot be applied to learnable parameters, src->type = %d", src->type);
 				ASSERT_MSG(dst->type==BUF_NORMAL||dst->type==BUF_NORMAL_SAVED, "LReLU cannot be applied to learnable parameters, src->type = %d", dst->type);
 				LeakyReLU(src->data, dst->data, src->shape[0]*src->shape[1]*src->shape[2]*src->shape[3]);
+				if(is_test)
+					saveidx+=result_add(result, dst, saveidx, 0, 0);
 			}
 			continue;
 		case OP_RELU:
@@ -2405,6 +2501,8 @@ double forward_cpu(Model *model, int is_test, ResultCtx *result)
 				ASSERT_MSG(src->type==BUF_NORMAL||src->type==BUF_NORMAL_SAVED, "ReLU cannot be applied to learnable parameters, src->type = %d", src->type);
 				ASSERT_MSG(dst->type==BUF_NORMAL||dst->type==BUF_NORMAL_SAVED, "ReLU cannot be applied to learnable parameters, src->type = %d", dst->type);
 				ReLU(src->data, dst->data, src->shape[0]*src->shape[1]*src->shape[2]*src->shape[3]);
+				if(is_test)
+					saveidx+=result_add(result, dst, saveidx, 0, 0);
 			}
 			continue;
 		case OP_QUANTIZER:
@@ -2597,7 +2695,32 @@ int main(int argc, char **argv)
 		nlayers+=inst->op==OP_CC2||inst->op==OP_CONV2;
 	}
 
+#if 0
+	printf("\n%lld instructions, %lld buffers\n", model.instructions->count, model.buffers->count);
+	for(int ki=0;ki<(int)model.instructions->count;++ki)
+	{
+		Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+		const char *a=0;
+		switch(inst->op)
+		{
+		case OP_CC2			:a="OP_CC2      ";break;
+		case OP_CONV2		:a="OP_CONV2    ";break;
+		case OP_RELU		:a="OP_RELU     ";break;
+		case OP_LRELU		:a="OP_LRELU    ";break;
+		case OP_QUANTIZER	:a="OP_QUANTIZER";break;
+		case OP_MSE			:a="OP_MSE      ";break;
+		case OP_MS_SSIM		:a="OP_MS_SSIM  ";break;
+		}
+		printf("%d: %s fwd [%d %d %d] -> %d, bwd [%d %d %d] -> [%d %d %d]\n", ki, a,
+			inst->fwd_args[0], inst->fwd_args[1], inst->fwd_args[2], inst->fwd_result,
+			inst->bwd_args[0], inst->bwd_args[1], inst->bwd_args[2],
+			inst->bwd_results[0], inst->bwd_results[1], inst->bwd_results[2]);
+	}
+	pause();
+#endif
+
 	printf("%d buffers\n%lld parameters, %d layers\n%d epochs, lr=%g, batchSize=%d\n", nallocs, model.nparams, nlayers, epoch, lr, model.input_shape[0]);
+	//lr/=model.input_shape[0];
 
 	//read dataset directory
 	ArrayHandle filenames=get_filenames(model.trainpath->data, extensions, COUNTOF(extensions));
@@ -2608,9 +2731,9 @@ int main(int argc, char **argv)
 		beta1=0.94, beta2=0.9878, epsilon=1e-8,//adam optimizer
 		beta1_t=beta1, beta2_t=beta2;
 	int nbatches=0;
-	int ki=0,//points at current image to load
+	int kim=0,//points at current image to load
 		kblock=0;//points at current image block in case of block augmentation
-	double timestamp1=time_ms(), timestamp2;
+	double timestamp1, timestamp2;
 	int ke=0;
 	cl_mem gpu_indices=0, gpu_adam_params=0;
 	int qlevels=0;
@@ -2634,9 +2757,9 @@ int main(int argc, char **argv)
 		gpu_indices		=p_clCreateBuffer(context, CL_MEM_READ_ONLY, 17*sizeof(int), 0, &error);	CL_CHECK(error);
 		gpu_adam_params	=p_clCreateBuffer(context, CL_MEM_READ_ONLY, 6*sizeof(float), 0, &error);	CL_CHECK(error);
 
-		for(int ki=0;ki<(int)model.instructions->count;++ki)
+		for(int kin=0;kin<(int)model.instructions->count;++kin)
 		{
-			Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+			Instruction *inst=(Instruction*)array_at(&model.instructions, kin);
 			if(inst->op==OP_QUANTIZER)
 			{
 				qlevels=inst->info[0];
@@ -2644,20 +2767,29 @@ int main(int argc, char **argv)
 			}
 		}
 	}
-	for(;;)
+	double min_loss=_HUGE;
+	timestamp1=time_ms();
+	for(;;)//training loop
 	{
 		//load data
-		int epoch_inc=load_data((char*)model.trainpath, filenames, &ki, &kblock, &model);
+		int epoch_inc=load_data((char*)model.trainpath->data, filenames, &kim, &kblock, &model);
 		if(epoch_inc)
 		{
 			timestamp2=time_ms();
 			++ke;
 			av_loss/=nbatches;
+			int need2save=min_loss>av_loss;
 			double psnr=20*log10(255/av_loss);
 			acme_strftime(g_buf, G_BUF_SIZE, (timestamp2-timestamp1)/1000);
-			printf("\t\t\t\t\rEpoch %3d RMSE %16.12lf PSNR %13.9lf %10lf minutes %s\n", ke, av_loss, psnr, (timestamp2-timestamp1)/60000, g_buf);
-			
-			save_model(&model, 1, av_loss);
+			printf("\t\t\t\t\rEpoch %3d RMSE %16.12lf PSNR %13.9lf %10lf minutes %s", ke, av_loss, psnr, (timestamp2-timestamp1)/60000, g_buf);
+			if(need2save)
+			{
+				if(isfinite(min_loss))
+					printf(" %10lf%%", 100.*(av_loss-min_loss)/min_loss);
+				min_loss=av_loss;
+				save_model(&model, 1, av_loss);
+			}
+			printf("\n");
 
 			if(ke>=epoch)
 				break;
@@ -2672,9 +2804,9 @@ int main(int argc, char **argv)
 		{
 			loss=forward_gpu(&model, 0, ke, qlevels, &cpu_indices, gpu_indices, 0);
 
-			for(int ki=(int)model.instructions->count-1;ki>=0;--ki)		//GPU backward
+			for(int kin=(int)model.instructions->count-1;kin>=0;--kin)		//GPU backward
 			{
-				Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+				Instruction *inst=(Instruction*)array_at(&model.instructions, kin);
 				switch(inst->op)
 				{
 				case OP_CC2:
@@ -2710,8 +2842,8 @@ int main(int argc, char **argv)
 						error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &model.gpu_grad);		CL_CHECK(error);
 						error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
 
-						p_clFlush(commandqueue);
-						p_clFinish(commandqueue);
+						error=p_clFlush(commandqueue);	CL_CHECK(error);
+						error=p_clFinish(commandqueue);	CL_CHECK(error);
 					}
 					break;
 				case OP_CONV2:
@@ -2719,38 +2851,42 @@ int main(int argc, char **argv)
 					break;
 				case OP_LRELU:
 				case OP_RELU:
+				case OP_QUANTIZER:
 					{
 						Buffer
 							*bufdL_dout	=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
-							*bufout		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+							*bufin		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
 							*bufdL_din	=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
 
 						kernel=0;
 						switch(inst->op)
 						{
-						case OP_LRELU:	kernel=kernels[OCL_lrelu_grad	];break;
-						case OP_RELU:	kernel=kernels[OCL_relu_grad	];break;
+						case OP_LRELU:		kernel=kernels[OCL_lrelu_grad		];break;
+						case OP_RELU:		kernel=kernels[OCL_relu_grad		];break;
+						case OP_QUANTIZER:	kernel=kernels[OCL_quantizer_grad	];break;
 						}
-						for(int ki2=ki-1;ki2>=0;--ki2)//look for a conv instruction before, and take its indices
+						for(int kin2=kin-1;kin2>=0;--kin2)//look for a conv instruction before, and take its indices
 						{
-							inst=(Instruction*)array_at(&model.instructions, ki2);
+							inst=(Instruction*)array_at(&model.instructions, kin2);
 							if(inst->op==OP_CC2||inst->op==OP_CONV2)
 							{
-								fill_indices(&model, ki2, ke, qlevels, &cpu_indices, gpu_indices);
+								//printf("[%d] op %d filling indices from %d\n", kin, inst->op, kin2);
+								fill_indices(&model, kin2, ke, qlevels, &cpu_indices, gpu_indices);
 								break;
 							}
 						}
 						osize=bufdL_din->shape[0]*bufdL_din->shape[1]*bufdL_din->shape[2]*bufdL_din->shape[3];
 						error=p_clSetKernelArg(kernel, 0, sizeof(cl_mem), &gpu_indices);		CL_CHECK(error);
 						error=p_clSetKernelArg(kernel, 1, sizeof(cl_mem), &bufdL_dout->gpu_buf);CL_CHECK(error);
-						error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &bufout->gpu_buf);	CL_CHECK(error);
+						error=p_clSetKernelArg(kernel, 2, sizeof(cl_mem), &bufin->gpu_buf);		CL_CHECK(error);
 						error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &bufdL_din->gpu_buf);	CL_CHECK(error);
 						error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &osize, 0, 0, 0, 0);	CL_CHECK(error);
-						p_clFlush(commandqueue);
-						p_clFinish(commandqueue);
+						//if(kin==8)//
+						//	kin=8;//
+						error=p_clFlush(commandqueue);	CL_CHECK(error);
+						error=p_clFinish(commandqueue);	CL_CHECK(error);
 					}
 					break;
-				case OP_QUANTIZER://identity
 				case OP_MSE://identity
 					break;
 				case OP_MS_SSIM:
@@ -2782,17 +2918,17 @@ int main(int argc, char **argv)
 			error=p_clSetKernelArg(kernel, 3, sizeof(cl_mem), &model.gpu_adam_v);	CL_CHECK(error);
 			error=p_clSetKernelArg(kernel, 4, sizeof(cl_mem), &model.gpu_params);	CL_CHECK(error);
 			error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &model.nparams, 0, 0, 0, 0);	CL_CHECK(error);
-			p_clFlush(commandqueue);
-			p_clFinish(commandqueue);
+			error=p_clFlush(commandqueue);	CL_CHECK(error);
+			error=p_clFinish(commandqueue);	CL_CHECK(error);
 		}
 		else
 		{
 			loss=forward_cpu(&model, 0, 0);
 
 			//CPU backward
-			for(int ki=(int)model.instructions->count-1;ki>=0;--ki)
+			for(int kin=(int)model.instructions->count-1;kin>=0;--kin)
 			{
-				Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+				Instruction *inst=(Instruction*)array_at(&model.instructions, kin);
 #ifdef DEBUG_AUTOGRAD
 				const char *a=0;
 				switch(inst->op)
@@ -2805,7 +2941,7 @@ int main(int argc, char **argv)
 				case OP_MSE			:a="OP_MSE      ";break;
 				case OP_MS_SSIM		:a="OP_MS_SSIM  ";break;
 				}
-				printf("bwd %d/%d %s\n", ki+1, (int)model.instructions->count, a);//
+				printf("bwd %d/%d %s\n", kin+1, (int)model.instructions->count, a);//
 #endif
 				switch(inst->op)
 				{
@@ -2827,41 +2963,44 @@ int main(int argc, char **argv)
 					LOG_ERROR("Conv2d is not supported yet. Use CC2D.");
 					break;
 				case OP_LRELU:
+				case OP_RELU:
+				case OP_QUANTIZER:
 					{
 						Buffer
 							*dL_dout=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
-							*out	=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
+							*in		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
 							*dL_din	=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
 						ASSERT_MSG(dL_dout->type==BUF_NORMAL||dL_dout->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dout->type);
-						ASSERT_MSG(out->type==BUF_NORMAL||out->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", out->type);
+						ASSERT_MSG(in->type==BUF_NORMAL||in->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", in->type);
 						ASSERT_MSG(dL_din->type==BUF_NORMAL||dL_din->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_din->type);
-						size_t size=out->shape[0]*out->shape[1]*out->shape[2]*out->shape[3];
-						for(int k=0;k<size;++k)//dL_dout .* act'(out)
+						size_t size=in->shape[0]*in->shape[1]*in->shape[2]*in->shape[3];
+						switch(inst->op)
 						{
-							dL_din->data[k]=dL_dout->data[k];
-							if(out->data[k]<0)
-								dL_din->data[k]*=0.01;
+						case OP_LRELU:
+							for(int k=0;k<size;++k)//dL_din = dL_dout .* act'(in)
+							{
+								dL_din->data[k]=dL_dout->data[k];
+								if(in->data[k]<0)
+									dL_din->data[k]*=0.01;
+							}
+							break;
+						case OP_RELU:
+							for(int k=0;k<size;++k)//dL_din = dL_dout .* act'(in)
+							{
+								double x=in->data[k];
+								dL_din->data[k]=x<0?0:dL_dout->data[k];
+							}
+							break;
+						case OP_QUANTIZER:
+							for(int k=0;k<size;++k)//dL_din = dL_dout .* rect(in)
+							{
+								double x=in->data[k];
+								dL_din->data[k]=dL_dout->data[k]*((x>=0)-(x>1));
+							}
+							break;
 						}
 					}
 					break;
-				case OP_RELU:
-					{
-						Buffer
-							*dL_dx2	=(Buffer*)array_at(&model.buffers, inst->bwd_args[0]),
-							*x2		=(Buffer*)array_at(&model.buffers, inst->bwd_args[1]),
-							*dL_dnet=(Buffer*)array_at(&model.buffers, inst->bwd_results[0]);
-						ASSERT_MSG(dL_dx2->type==BUF_NORMAL||dL_dx2->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dx2->type);
-						ASSERT_MSG(x2->type==BUF_NORMAL||x2->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", x2->type);
-						ASSERT_MSG(dL_dnet->type==BUF_NORMAL||dL_dnet->type==BUF_NORMAL_SAVED, "LRELU cannot be applied to learnable parameters, src->type = %d", dL_dnet->type);
-						size_t size=x2->shape[0]*x2->shape[1]*x2->shape[2]*x2->shape[3];
-						for(int k=0;k<size;++k)//dL_dx2 .* act'(x2)
-						{
-							double x=x2->data[k];
-							dL_dnet->data[k]=x<0?0:dL_dx2->data[k];
-						}
-					}
-					break;
-				case OP_QUANTIZER://identity
 				case OP_MSE://identity
 					break;
 				case OP_MS_SSIM:
@@ -2873,10 +3012,13 @@ int main(int argc, char **argv)
 				}
 			}
 
+			//for(int k=0;k<model.nparams;++k)//SGD
+			//	((double*)model.cpu_params->data)[k]-=lr*((double*)model.cpu_grad->data)[k];
+
 			mix_inplace((double*)model.cpu_adam_m->data, (double*)model.cpu_grad->data, beta1, model.cpu_grad->count);
 			sq_inplace((double*)model.cpu_grad->data, model.cpu_grad->count);
 			mix_inplace((double*)model.cpu_adam_v->data, (double*)model.cpu_grad->data, beta2, model.cpu_grad->count);
-
+			
 			double gain1=1/(1-beta1_t), gain2=1/(1-beta2_t);
 			for(int k=0;k<model.cpu_grad->count;++k)//https://optimization.cbe.cornell.edu/index.php?title=Adam
 			{
@@ -2890,8 +3032,9 @@ int main(int argc, char **argv)
 		loss=255*sqrt(loss);
 		av_loss+=loss;
 		++nbatches;
-
-		printf("%d/%d = %5.2lf%% RMSE %16.12lf\t\t\r", ki+1, (int)filenames->count, 100.*(ki+1)/filenames->count, loss);
+		
+		//printf("%d/%d = %5.2lf%% RMSE %16.12lf\t\t\r\n", kim, (int)filenames->count, 100.*(kim+1)/filenames->count, loss);
+		printf("%d/%d = %5.2lf%% RMSE %16.12lf\t\t\r", kim, (int)filenames->count, 100.*(kim+1)/filenames->count, loss);
 	}
 
 	save_model(&model, 0, av_loss);
@@ -2905,9 +3048,9 @@ int main(int argc, char **argv)
 	//change batch size to filenames->count
 #if 0
 	ASSERT_MSG(filenames->count<=64, "Test dataset has too many samples (max is 64)");
-	for(int ki=(int)model.instructions->count-1;ki>=0;--ki)
+	for(int kin=(int)model.instructions->count-1;kin>=0;--kin)
 	{
-		Instruction *inst=(Instruction*)array_at(&model.instructions, ki);
+		Instruction *inst=(Instruction*)array_at(&model.instructions, kin);
 		switch(inst->op)
 		{
 		case OP_CC2:
@@ -2944,7 +3087,8 @@ int main(int argc, char **argv)
 	int black=0xFF000000;
 	memfill(res.rgb, &black, res.size*sizeof(int), sizeof(int));
 
-	load_data((char*)model.trainpath, filenames, &ki, &kblock, &model);
+	kim=0, kblock=0;
+	load_data((char*)model.trainpath->data, filenames, &kim, &kblock, &model);
 	
 	timestamp1=time_ms();
 	if(using_gpu)

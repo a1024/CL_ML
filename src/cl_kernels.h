@@ -187,17 +187,17 @@ __kernel void cc2d_grad_in	(__global const int *indices, __global const DataType
 	}
 	dL_din[idx]=sum;
 }
-__kernel void cc2d_grad_filt(__global const int *indices, __global const DataType *dL_dnet, __global const DataType *in, __global DataType *dL_dfilt)//for each weight from [Co,Ci,Kh,Kw]
+__kernel void cc2d_grad_filt(__global const int *indices, __global const DataType *dL_dnet, __global const DataType *in, __global DataType *grad_dL_dfilt)//for each weight from [Co,Ci,Kh,Kw]
 {
-	int idx=get_global_id(0);
+	int idx=get_global_id(0), idx2=idx;
 	__global DataType const *netch, *outch;
 	__global ConvInfo const *info=(__global ConvInfo const*)indices;
 	int ores=info->Wo*info->Ho, ires=info->Wi*info->Hi;
 	int koc, kic, kky, kkx;
-	kkx=idx%info->Kw, idx/=info->Kw;
-	kky=idx%info->Kh, idx/=info->Kh;
-	kic=idx%info->Ci, idx/=info->Ci;
-	koc=idx;
+	kkx=idx2%info->Kw, idx2/=info->Kw;
+	kky=idx2%info->Kh, idx2/=info->Kh;
+	kic=idx2%info->Ci, idx2/=info->Ci;
+	koc=idx2;
 	DataType sum=0;
 	for(int kb=0;kb<info->B;++kb)//for each sample in batch
 	{
@@ -218,9 +218,12 @@ __kernel void cc2d_grad_filt(__global const int *indices, __global const DataTyp
 			}
 		}
 	}
-	dL_dfilt[idx]=sum;
+	grad_dL_dfilt[info->weight+idx]=sum;
+
+	//if(idx<100)//DEBUG
+	//	printf("cc2d_grad_filt [[%d]] dL_dfilt %g\n", idx, grad_dL_dfilt[idx]);
 }
-__kernel void cc2d_grad_bias(__global const int *indices, __global const DataType *dL_dnet, __global DataType *dL_dbias)//for each bias from [Co]
+__kernel void cc2d_grad_bias(__global const int *indices, __global const DataType *dL_dnet, __global DataType *grad_dL_dbias)//for each bias from [Co]
 {
 	int idx=get_global_id(0);
 	__global ConvInfo const *info=(__global ConvInfo const*)indices;
@@ -239,7 +242,7 @@ __kernel void cc2d_grad_bias(__global const int *indices, __global const DataTyp
 		//		sum+=src[info->Wo*ky+kx];
 		//}
 	}
-	dL_dbias[idx]=sum;
+	grad_dL_dbias[info->bias+idx]=sum;
 }
 
 //element-wise operations (eg: nonlinearity, quantizer) use same indices array as cc/conv, and operate on [B,Co,Ho,Wo]
@@ -249,13 +252,16 @@ __kernel void lrelu			(__global const int *indices, __global const DataType *in,
 	DataType x=in[idx];
 	out[idx]=x<0?MUL(ONE_PERCENT, x):x;
 }
-__kernel void lrelu_grad	(__global const int *indices, __global const DataType *dL_dout, __global const DataType *out, __global DataType *dL_din)//for each [B,Co,Ho,Wo]
+__kernel void lrelu_grad	(__global const int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)//for each [B,Co,Ho,Wo]
 {
 	int idx=get_global_id(0);
-	if(out[idx]<0)//dL_din = dL_dout .* act'(out)
+	if(in[idx]<0)//dL_din = dL_dout .* act'(in)
 		dL_din[idx]=MUL(ONE_PERCENT, dL_dout[idx]);
 	else
 		dL_din[idx]=dL_dout[idx];
+
+	//if(idx<100)//DEBUG
+	//	printf("lrelu_grad [[%d]] dL_dout %g  in %g -> dL_din %g\n", idx, dL_dout[idx], in[idx], dL_din[idx]);
 }
 
 __kernel void relu			(__global const int *indices, __global const DataType *in, __global DataType *out)//for each [B,Co,Ho,Wo]
@@ -264,11 +270,11 @@ __kernel void relu			(__global const int *indices, __global const DataType *in, 
 	DataType x=in[idx];
 	out[idx]=x<0?0:x;
 }
-__kernel void relu_grad		(__global const int *indices, __global const DataType *dL_dout, __global const DataType *out, __global DataType *dL_din)//for each [B,Co,Ho,Wo]
+__kernel void relu_grad		(__global const int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)//for each [B,Co,Ho,Wo]
 {
-	int idx=get_global_id(0);//dL_din = dL_dout .* act'(out)
-	dL_din[idx]=dL_dout[idx]*(out[idx]>=0);
-	//if(out[idx]<0)
+	int idx=get_global_id(0);//dL_din = dL_dout .* act'(in)
+	dL_din[idx]=dL_dout[idx]*(in[idx]>=0);
+	//if(in[idx]<0)
 	//	dL_din[idx]=0;
 	//else
 	//	dL_din[idx]=dL_dout[idx];
@@ -290,8 +296,27 @@ __kernel void quantizer_train(__global const int *indices, __global const DataTy
 {
 	int idx=get_global_id(0);
 	__global ConvInfo const *info=(__global ConvInfo const*)indices;
-	DataType x=in[idx]+rand(idx*info->epoch)/info->qlevels;
+	DataType x=in[idx]+rand(idx*info->epoch)/info->qlevels;//should work with float and fixed
 	out[idx]=clamp(x, ZERO, ONE);
+
+	//if(idx<50)//DEBUG
+	//	printf("[[%d]] %g clamp %g\n", idx, x, out[idx]);
+}
+__kernel void quantizer_grad(__global const int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)
+{
+	int idx=get_global_id(0);//dL_din = dL_dout .* rect(in)
+
+	dL_din[idx]=MUL(dL_dout[idx], (in[idx]>=0)-(in[idx]>1));
+
+	//DataType x=dL_dout[idx], y=in[idx];
+	//if(y<ZERO)
+	//	x=ZERO;
+	//if(y>ONE)
+	//	x=ZERO;
+	//dL_din[idx]=x;
+
+	//if(idx<50)//DEBUG
+	//	printf("[[%d]] dL_dout %g in %g\n", idx, dL_dout[idx], in[idx]);
 }
 __kernel void quantizer_test(__global const int *indices, __global const DataType *in, __global DataType *out)
 {
@@ -308,6 +333,10 @@ __kernel void loss_MSE		(__global const int *indices, __global const DataType *s
 {
 	int idx=get_global_id(0);
 	__global ConvInfo const *info=(__global ConvInfo const*)indices;
+
+	//if(idx<50)//DEBUG
+	//	printf("[[%d]] xhat %g x %g\n", idx, s1[idx], s2[idx]);//
+
 	diff[idx]=s1[idx]-s2[idx];
 }
 
@@ -319,11 +348,18 @@ __kernel void opt_adam		(__global const DataType *betas, __global const DataType
 {
 	int idx=get_global_id(0);
 	__global AdamInfo const *info=(__global AdamInfo const*)betas;
-	DataType g2, mhat, vhat;
+
+	//params[idx]-=MUL(info->lr, grad[idx]);//SGD
+
+	DataType g2, mhat, vhat, change;
 	adam_m[idx]=MIX(adam_m[idx], grad[idx], info->beta1);
 	g2=MUL(grad[idx], grad[idx]);
 	adam_v[idx]=MIX(adam_v[idx], g2, info->beta2),
 	mhat=MUL(adam_m[idx], info->gain1);
 	vhat=MUL(adam_v[idx], info->gain2);
-	params[idx]-=DIV(MUL(info->lr, mhat), (SQRT(vhat)+info->epsilon));
+	change=DIV(MUL(info->lr, mhat), (SQRT(vhat)+info->epsilon));
+	params[idx]-=change;
+
+	//if(idx<50)//DEBUG
+	//	printf("[[%d]] param %g lr %g grad %g change %g\n", idx, params[idx], info->lr, grad[idx], change);//
 }
