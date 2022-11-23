@@ -16,10 +16,65 @@
 #include"stb_image.h"
 static const char file[]=__FILE__;
 
-//	#define FIXED_PREC
+//	#define		FIXED_PREC
 
-//	#define DEBUG_SAVER
-//	#define DEBUG_AUTOGRAD
+//	#define		DEBUG_SAVER
+//	#define		DEBUG_AUTOGRAD
+
+	#define		PROFILE_LEXER
+
+#ifdef PROFILE_LEXER
+#define			PROF_STAGES\
+	PROF_LABEL(COMPILE)\
+	PROF_LABEL(PARSE)\
+	PROF_LABEL(INIT)\
+	PROF_LABEL(LOAD)\
+	PROF_LABEL(FWD)\
+	PROF_LABEL(BWD)\
+	PROF_LABEL(OPT)\
+	PROF_LABEL(SAVE)
+enum			ProfilerStage
+{
+#define			PROF_LABEL(LABEL)	PROF_##LABEL,
+	PROF_STAGES
+#undef			PROF_LABEL
+	PROF_COUNT,
+};
+const char		*prof_labels[]=
+{
+#define			PROF_LABEL(LABEL)	#LABEL,
+	PROF_STAGES
+#undef			PROF_LABEL
+};
+#undef			PROF_STAGES
+int				prof_count[PROF_COUNT]={0};
+long long		prof_cycles[PROF_COUNT]={0}, prof_temp=0;
+#define			PROF_INIT()		prof_temp=__rdtsc()
+#define			PROF(LABEL)		++prof_count[PROF_##LABEL], prof_cycles[PROF_##LABEL]+=__rdtsc()-prof_temp, prof_temp=__rdtsc()
+void			prof_end()
+{
+	long long sum=0;
+	int longestLabel=0;
+	for(int k=0;k<PROF_COUNT;++k)
+		sum+=prof_cycles[k];
+	printf("\nPROFILER\nLabel\t\tvisited\tcycles\tpercentage\tcycles_per_call\n");
+	for(int k=0;k<PROF_COUNT;++k)
+	{
+		int len=strlen(prof_labels[k]);
+		if(longestLabel<len)
+			longestLabel=len;
+	}
+	for(int k=0;k<PROF_COUNT;++k)
+		printf("%s%*s:\t%d\t%12lld\t%.2lf%%\t%19lf\n", prof_labels[k], longestLabel-strlen(prof_labels[k]), "", prof_count[k], prof_cycles[k], 100.*prof_cycles[k]/sum, (double)prof_cycles[k]/prof_count[k]);
+	printf("\n");
+	memset(prof_cycles, 0, sizeof(prof_cycles));
+	memset(prof_count, 0, sizeof(prof_count));
+}
+#else
+#define			PROF_INIT()
+#define			PROF(...)
+#define			prof_end()
+#endif
 
 #ifdef _MSC_VER
 int set_console_buffer_size(short w, short h)
@@ -546,7 +601,7 @@ typedef struct ModelStruct
 	AugmentationType aug;
 	int input_shape[4],//[B,C,W,H]
 		is_test,
-		input;//index in buffers
+		input_idx;//index in buffers
 	ArrayHandle
 		src,				//string with the model source code, for saving
 		trainpath, testpath,//strings with paths to datasets
@@ -564,7 +619,8 @@ typedef struct ModelStruct
 			cl_mem gpu_params, gpu_grad, gpu_adam_m, gpu_adam_v;
 		};
 	};
-	float *gpu_input, *gpu_output;
+	float *input,
+		*gpu_output;
 } Model;
 void free_buffer(void *p)
 {
@@ -604,7 +660,7 @@ void free_model(void *p)
 		array_free(&model->cpu_grad);
 		array_free(&model->cpu_params);
 	}
-	free(model->gpu_input);
+	free(model->input);
 	free(model->gpu_output);
 }
 typedef struct VariableStruct
@@ -1533,7 +1589,7 @@ size_t parse_model(const char *filename, Model* model)
 
 	{
 		Instruction *inst=(Instruction*)array_at(&model->instructions, 0);
-		model->input=inst->fwd_args[0];
+		model->input_idx=inst->fwd_args[0];
 	}
 	return memusage;
 }
@@ -1911,6 +1967,14 @@ void dcrosscorrelation_dbias_2d(Model *model, Buffer *buf_dL_dnet, Buffer *buf_d
 	}
 }
 
+typedef struct LoaderParamsStruct
+{
+	const char *path;
+	ArrayHandle filenames;
+	int *kim, *kblock;
+	Model *model;
+	int epoch_inc;
+} LoaderParams;
 const char *extensions[]=
 {
 	"jpg",
@@ -1946,8 +2010,8 @@ void assign_sample(const unsigned char *image, int iw, int ih, int px, int py, i
 	{
 		for(int ky=0;ky<input->shape[2];++ky)
 		{
-			if(gpubuf)
-			{
+			//if(gpubuf)
+			//{
 				float *frow=gpubuf+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
 				int ky2=ky+py;
 				if((unsigned)ky2<(unsigned)ih)
@@ -1959,21 +2023,21 @@ void assign_sample(const unsigned char *image, int iw, int ih, int px, int py, i
 							frow[kx]=(float)(image[(iw*ky2+kx2)<<2|kc]*gain);
 					}
 				}
-			}
-			else
-			{
-				double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
-				int ky2=ky+py;
-				if((unsigned)ky2<(unsigned)ih)
-				{
-					for(int kx=0;kx<input->shape[3];++kx)
-					{
-						int kx2=kx+px;
-						if((unsigned)kx2<(unsigned)ih)
-							dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
-					}
-				}
-			}
+			//}
+			//else
+			//{
+			//	double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+			//	int ky2=ky+py;
+			//	if((unsigned)ky2<(unsigned)ih)
+			//	{
+			//		for(int kx=0;kx<input->shape[3];++kx)
+			//		{
+			//			int kx2=kx+px;
+			//			if((unsigned)kx2<(unsigned)ih)
+			//				dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
+			//		}
+			//	}
+			//}
 		}
 	}
 }
@@ -1983,13 +2047,13 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 	static int ki0=-1, iw=0, ih=0;
 	
 	int warp=0;
-	Buffer *input=(Buffer*)array_at(&model->buffers, model->input);
+	Buffer *input=(Buffer*)array_at(&model->buffers, model->input_idx);
 	size_t isize=input->shape[0]*input->shape[1]*input->shape[2]*input->shape[3];
 	int error;
-	if(using_gpu)
-		memset(model->gpu_input, 0, isize*sizeof(float));
-	else
-		memset(input->data, 0, isize*sizeof(double));
+	//if(using_gpu)
+		memset(model->input, 0, isize*sizeof(float));
+	//else
+	//	memset(input->data, 0, isize*sizeof(double));
 	switch(model->aug)
 	{
 	case AUG_BLOCK://partition image to blocks
@@ -2016,7 +2080,8 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 				}
 				int px=(*kblock%bcx)*input->shape[3],
 					py=(*kblock/bcx)*input->shape[2];
-				assign_sample(image, iw, ih, px, py, kb, input, using_gpu?model->gpu_input:0);
+				assign_sample(image, iw, ih, px, py, kb, input, model->input);
+				//assign_sample(image, iw, ih, px, py, kb, input, using_gpu?model->gpu_input:0);
 			}
 		}
 		break;
@@ -2031,7 +2096,7 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 
 			int px=iw<=input->shape[3]?0:rand()%(iw-input->shape[3]),
 				py=ih<=input->shape[2]?0:rand()%(ih-input->shape[2]);
-			assign_sample(image, iw, ih, px, py, kb, input, using_gpu?model->gpu_input:0);
+			assign_sample(image, iw, ih, px, py, kb, input, model->input);
 		}
 		break;
 	case AUG_STRETCH://stretch image (smaller or larger dimensions), nearest for now
@@ -2049,26 +2114,26 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 				{
 					for(int ky=0;ky<input->shape[2];++ky)
 					{
-						if(using_gpu)
-						{
-							float *frow=model->gpu_input+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+						//if(using_gpu)
+						//{
+							float *frow=model->input+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
 							int ky2=ky*(ih-1)/(input->shape[2]-1);
 							for(int kx=0;kx<input->shape[3];++kx)
 							{
 								int kx2=kx*(iw-1)/(input->shape[3]-1);
 								frow[kx]=(float)(image[(iw*ky2+kx2)<<2|kc]*gain);
 							}
-						}
-						else
-						{
-							double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
-							int ky2=ky*(ih-1)/(input->shape[2]-1);
-							for(int kx=0;kx<input->shape[3];++kx)
-							{
-								int kx2=kx*(iw-1)/(input->shape[3]-1);
-								dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
-							}
-						}
+						//}
+						//else
+						//{
+						//	double *dstrow=input->data+input->shape[3]*(input->shape[2]*(input->shape[1]*kb+kc)+ky);
+						//	int ky2=ky*(ih-1)/(input->shape[2]-1);
+						//	for(int kx=0;kx<input->shape[3];++kx)
+						//	{
+						//		int kx2=kx*(iw-1)/(input->shape[3]-1);
+						//		dstrow[kx]=image[(iw*ky2+kx2)<<2|kc]*gain;
+						//	}
+						//}
 					}
 				}
 			}
@@ -2080,14 +2145,37 @@ int load_data(const char *path, ArrayHandle filenames, int *ki, int *kblock, Mod
 #ifdef FIXED_PREC
 		for(int k=0;k<isize;++k)
 		{
-			float *val=model->gpu_input+k;
+			float *val=model->input+k;
 			*(int*)val=*val*0x10000;
 		}
 #endif
-		error=p_clEnqueueWriteBuffer(commandqueue, input->gpu_buf, CL_TRUE, 0, isize*sizeof(float), model->gpu_input, 0, 0, 0);
-		CL_CHECK(error);
 	}
 	return warp;
+}
+#ifdef _MSC_VER
+DWORD __stdcall LoaderProc(void *param)
+{
+	LoaderParams *p=(LoaderParams*)param;
+	p->epoch_inc=load_data(p->path, p->filenames, p->kim, p->kblock, p->model);
+	return 0;
+}
+#else
+#error TODO
+#endif
+void send_input(Model *model)
+{
+	Buffer *input=(Buffer*)array_at(&model->buffers, model->input_idx);
+	size_t isize=input->shape[0]*input->shape[1]*input->shape[2]*input->shape[3];
+	if(using_gpu)
+	{
+		int error=p_clEnqueueWriteBuffer(commandqueue, input->gpu_buf, CL_TRUE, 0, isize*sizeof(float), model->input, 0, 0, 0);
+		CL_CHECK(error);
+	}
+	else
+	{
+		for(int k=0;k<isize;++k)//cast to double
+			input->data[k]=model->input[k];
+	}
 }
 
 typedef struct ConvInfoStruct//68 bytes
@@ -2613,10 +2701,12 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	int error;
+	PROF_INIT();
 	if(!strcmp(argv[ARG_DEVICE], "GPU"))
 	{
 		using_gpu=1;
 		ocl_init("cl_kernels.h");
+		PROF(COMPILE);
 	}
 	else if(strcmp(argv[ARG_DEVICE], "CPU"))//not CPU
 	{
@@ -2682,6 +2772,7 @@ int main(int argc, char **argv)
 	double lr=atof(argv[ARG_LR]);
 	model.input_shape[0]=atoi(argv[ARG_BATCHSIZE]);//Batch size
 	int nallocs=(int)parse_model(argc==ARG_MODEL?"model.txt":argv[ARG_MODEL], &model);
+	PROF(PARSE);
 
 	//for(int k=0;k<model.buffers->count;++k)
 	//{
@@ -2739,16 +2830,16 @@ int main(int argc, char **argv)
 	int qlevels=0;
 	size_t osize;
 	cl_kernel kernel;
+
+	Buffer *buf;
+	size_t size;
+	Instruction *inst;
+
+	buf=(Buffer*)array_at(&model.buffers, model.input_idx);
+	size=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
+	model.input=(float*)malloc(size*sizeof(float));
 	if(using_gpu)
 	{
-		Buffer *buf;
-		size_t size;
-		Instruction *inst;
-
-		buf=(Buffer*)array_at(&model.buffers, model.input);
-		size=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
-		model.gpu_input=(float*)malloc(size*sizeof(float));
-
 		inst=(Instruction*)array_at(&model.instructions, model.instructions->count-1);
 		buf=(Buffer*)array_at(&model.buffers, inst->fwd_result);
 		size=buf->shape[0]*buf->shape[1]*buf->shape[2]*buf->shape[3];
@@ -2769,42 +2860,38 @@ int main(int argc, char **argv)
 	}
 	double min_loss=_HUGE;
 	timestamp1=time_ms();
+	PROF(INIT);
+	DWORD threadId=0;
+	HANDLE hThread=0;
+	LoaderParams lp=
+	{
+		(char*)model.trainpath->data,
+		filenames,
+		&kim, &kblock,
+		&model
+	};
+	hThread=CreateThread(0, 0, LoaderProc, &lp, 0, &threadId);
+	ASSERT_MSG(hThread, "Failed to create loader thread");
+
+	WaitForSingleObject(hThread, INFINITE);
+	CloseHandle(hThread);
+	send_input(&model);
 	for(;;)//training loop
 	{
-		//load data
-		int epoch_inc=load_data((char*)model.trainpath->data, filenames, &kim, &kblock, &model);
-		if(epoch_inc)
-		{
-			timestamp2=time_ms();
-			++ke;
-			av_loss/=nbatches;
-			int need2save=min_loss>av_loss;
-			double psnr=20*log10(255/av_loss);
-			acme_strftime(g_buf, G_BUF_SIZE, (timestamp2-timestamp1)/1000);
-			printf("\t\t\t\t\rEpoch %3d RMSE %16.12lf PSNR %13.9lf %10lf minutes %s", ke, av_loss, psnr, (timestamp2-timestamp1)/60000, g_buf);
-			if(need2save)
-			{
-				if(isfinite(min_loss))
-					printf(" %10lf%%", 100.*(av_loss-min_loss)/min_loss);
-				min_loss=av_loss;
-				save_model(&model, 1, av_loss);
-			}
-			printf("\n");
-
-			if(ke>=epoch)
-				break;
-			
-			av_loss=0, nbatches=0;
-
-			beta1_t*=beta1;//Adam Optimizer
-			beta2_t*=beta2;
-		}
+		//load data start
+		hThread=CreateThread(0, 0, LoaderProc, &lp, 0, &threadId);
+		ASSERT_MSG(hThread, "Failed to create loader thread");
+		//int epoch_inc=load_data((char*)model.trainpath->data, filenames, &kim, &kblock, &model);
+		PROF(LOAD);
 
 		if(using_gpu)
 		{
 			loss=forward_gpu(&model, 0, ke, qlevels, &cpu_indices, gpu_indices, 0);
+			PROF(FWD);
 
-			for(int kin=(int)model.instructions->count-1;kin>=0;--kin)		//GPU backward
+			//GPU backward
+#if 1
+			for(int kin=(int)model.instructions->count-1;kin>=0;--kin)
 			{
 				Instruction *inst=(Instruction*)array_at(&model.instructions, kin);
 				switch(inst->op)
@@ -2897,6 +2984,8 @@ int main(int argc, char **argv)
 					break;
 				}
 			}
+#endif
+			PROF(BWD);
 			adam_params.lr=(float)lr;
 			adam_params.beta1=(float)beta1;
 			adam_params.beta2=(float)beta2;
@@ -2920,12 +3009,15 @@ int main(int argc, char **argv)
 			error=p_clEnqueueNDRangeKernel(commandqueue, kernel, 1, 0, &model.nparams, 0, 0, 0, 0);	CL_CHECK(error);
 			error=p_clFlush(commandqueue);	CL_CHECK(error);
 			error=p_clFinish(commandqueue);	CL_CHECK(error);
+			PROF(OPT);
 		}
 		else
 		{
 			loss=forward_cpu(&model, 0, 0);
+			PROF(FWD);
 
 			//CPU backward
+#if 1
 			for(int kin=(int)model.instructions->count-1;kin>=0;--kin)
 			{
 				Instruction *inst=(Instruction*)array_at(&model.instructions, kin);
@@ -3011,6 +3103,8 @@ int main(int argc, char **argv)
 					break;
 				}
 			}
+#endif
+			PROF(BWD);
 
 			//for(int k=0;k<model.nparams;++k)//SGD
 			//	((double*)model.cpu_params->data)[k]-=lr*((double*)model.cpu_grad->data)[k];
@@ -3027,6 +3121,7 @@ int main(int argc, char **argv)
 					vhat=((double*)model.cpu_adam_v->data)[k]*gain2;
 				((double*)model.cpu_params->data)[k]-=lr*mhat/(sqrt(vhat)+epsilon);
 			}
+			PROF(OPT);
 		}
 
 		loss=255*sqrt(loss);
@@ -3035,9 +3130,44 @@ int main(int argc, char **argv)
 		
 		//printf("%d/%d = %5.2lf%% RMSE %16.12lf\t\t\r\n", kim, (int)filenames->count, 100.*(kim+1)/filenames->count, loss);
 		printf("%d/%d = %5.2lf%% RMSE %16.12lf\t\t\r", kim, (int)filenames->count, 100.*(kim+1)/filenames->count, loss);
+
+		if(lp.epoch_inc)
+		{
+			timestamp2=time_ms();
+			++ke;
+			av_loss/=nbatches;
+			int need2save=min_loss>av_loss;
+			double psnr=20*log10(255/av_loss);
+			acme_strftime(g_buf, G_BUF_SIZE, (timestamp2-timestamp1)/1000);
+			printf("\t\t\t\t\rEpoch %3d RMSE %16.12lf PSNR %13.9lf %10lf minutes %s", ke, av_loss, psnr, (timestamp2-timestamp1)/60000, g_buf);
+			if(need2save)
+			{
+				if(isfinite(min_loss))
+					printf(" %10lf%%", 100.*(av_loss-min_loss)/min_loss);
+				min_loss=av_loss;
+				save_model(&model, 1, av_loss);
+				PROF(SAVE);
+			}
+			printf("\n");
+
+			if(ke>=epoch)
+				break;
+			
+			av_loss=0, nbatches=0;
+
+			beta1_t*=beta1;//Adam Optimizer
+			beta2_t*=beta2;
+		}
+
+		//load data end
+		WaitForSingleObject(hThread, INFINITE);
+		CloseHandle(hThread);
+		send_input(&model);
 	}
 
 	save_model(&model, 0, av_loss);
+	PROF(SAVE);
+	prof_end();
 	
 
 	//test
@@ -3089,6 +3219,7 @@ int main(int argc, char **argv)
 
 	kim=0, kblock=0;
 	load_data((char*)model.trainpath->data, filenames, &kim, &kblock, &model);
+	send_input(&model);
 	
 	timestamp1=time_ms();
 	if(using_gpu)
