@@ -21,15 +21,15 @@
 
 	#define		CONST		__constant
 //	#define		CONST		__global const
-#ifdef FIXED_PREC
-typedef int DataType; 
-#define		MUL(A, B)		((long)(A)*(B)>>16)
-#define		ONE_PERCENT		655//round(0x10000/100)
-#define		SQRT(X)			(int)(sqrt((float)(X)/0x10000)*0x10000)
-#define		DIV(N, D)		(int)(((long)(N)<<16)/(D))
+#ifdef PREC_FIXED
+typedef int DataType;
+#define		MUL(A, B)		((long)(A)*(B)>>PREC_FIXED)
+#define		ONE_PERCENT		((1<<PREC_FIXED)/100)//655//round(0x10000/100)
+#define		SQRT(X)			(int)(sqrt((float)(X)/(1<<PREC_FIXED))*(1<<PREC_FIXED))
+#define		DIV(N, D)		(int)(((long)(N)<<PREC_FIXED)/(D))
 #define		ZERO			0
-#define		ONE				0x10000
-#define		MIX(A, B, X)	((A)+(((B)-(A))*(X)>>16))
+#define		ONE				(1<<PREC_FIXED)
+#define		MIX(A, B, X)	((A)+(((B)-(A))*(X)>>PREC_FIXED))
 int			ROUND(int x)
 {
 	int neg=x>>31&1;
@@ -45,6 +45,20 @@ int			ROUND(int x)
 
 	return x;
 }
+//#define		PRINT			"%08X"
+#define		PRINT			"%d"
+#elif defined PREC_HALF//not supported on nVidia + OpenCL
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+typedef half DataType;
+#define		MUL(A, B)		((A)*(B))
+#define		ONE_PERCENT		0.01h
+#define		SQRT			sqrt
+#define		DIV(N, D)		(N/D)
+#define		ZERO			0.h
+#define		ONE				1.h
+#define		MIX				mix
+#define		ROUND			round
+#define		PRINT			"%04h"
 #else
 typedef float DataType;
 #define		MUL(A, B)		((A)*(B))
@@ -55,6 +69,7 @@ typedef float DataType;
 #define		ONE				1.f
 #define		MIX				mix
 #define		ROUND			round
+#define		PRINT			"%g"
 #endif
 
 typedef struct ConvInfoStruct//68 bytes
@@ -101,7 +116,7 @@ __kernel void cc2d			(CONST int *indices, __global const DataType *in, __global 
 		inch=in+ires*(info->Ci*kb+kic);
 //#ifdef DEBUG_KERNELS
 //		if(!idx)
-//			printf("glob size %d\n%g %g\n", get_global_size(0), params[0], params[9]);
+//			printf("glob size %d\n" PRINT " " PRINT "\n", get_global_size(0), params[0], params[9]);
 //			//printf("offsets filt %d in %d\n", info->weight+kres*(info->Ci*koc+kic), ires*(info->Ci*kb+kic));
 //			//printf("vertically %d to %d\nhorizontally %d to %d\n", koy-info->ypad+0, koy-info->ypad+info->Kh-1, kox-info->xpad+0, kox-info->xpad+info->Kw-1);
 //#endif
@@ -122,7 +137,7 @@ __kernel void cc2d			(CONST int *indices, __global const DataType *in, __global 
 						//	printf("%08X\n", as_int(prod));
 #ifdef DEBUG_KERNELS
 						if(idx==1)
-							printf("mul [%d,%d] %g and [%d,%d] %g sum %g\n", kky, kkx, filt[info->Kw*kky+kkx], kiy, kix, inch[info->Wi*kiy+kix], sum);
+							printf("mul [%d,%d] " PRINT " and [%d,%d] " PRINT " sum " PRINT "\n", kky, kkx, filt[info->Kw*kky+kkx], kiy, kix, inch[info->Wi*kiy+kix], sum);
 #endif
 					}
 				}
@@ -223,7 +238,7 @@ __kernel void cc2d_grad_filt(CONST int *indices, __global const DataType *dL_dne
 	grad_dL_dfilt[info->weight+idx]=sum;
 
 	//if(idx<100)//DEBUG
-	//	printf("cc2d_grad_filt [[%d]] dL_dfilt %g\n", idx, grad_dL_dfilt[idx]);
+	//	printf("cc2d_grad_filt [[%d]] dL_dfilt " PRINT "\n", idx, grad_dL_dfilt[idx]);
 }
 __kernel void cc2d_grad_bias(CONST int *indices, __global const DataType *dL_dnet, __global DataType *grad_dL_dbias)//for each bias from [Co]
 {
@@ -263,7 +278,7 @@ __kernel void lrelu_grad	(CONST int *indices, __global const DataType *dL_dout, 
 		dL_din[idx]=dL_dout[idx];
 
 	//if(idx<100)//DEBUG
-	//	printf("lrelu_grad [[%d]] dL_dout %g  in %g -> dL_din %g\n", idx, dL_dout[idx], in[idx], dL_din[idx]);
+	//	printf("lrelu_grad [[%d]] dL_dout " PRINT "  in " PRINT " -> dL_din " PRINT "\n", idx, dL_dout[idx], in[idx], dL_din[idx]);
 }
 
 __kernel void relu			(CONST int *indices, __global const DataType *in, __global DataType *out)//for each [B,Co,Ho,Wo]
@@ -302,7 +317,7 @@ __kernel void quantizer_train(CONST int *indices, __global const DataType *in, _
 	out[idx]=clamp(x, ZERO, ONE);
 
 	//if(idx<50)//DEBUG
-	//	printf("[[%d]] %g clamp %g\n", idx, x, out[idx]);
+	//	printf("[[%d]] " PRINT " clamp " PRINT "\n", idx, x, out[idx]);
 }
 __kernel void quantizer_grad(CONST int *indices, __global const DataType *dL_dout, __global const DataType *in, __global DataType *dL_din)
 {
@@ -318,7 +333,7 @@ __kernel void quantizer_grad(CONST int *indices, __global const DataType *dL_dou
 	//dL_din[idx]=x;
 
 	//if(idx<50)//DEBUG
-	//	printf("[[%d]] dL_dout %g in %g\n", idx, dL_dout[idx], in[idx]);
+	//	printf("[[%d]] dL_dout " PRINT " in " PRINT "\n", idx, dL_dout[idx], in[idx]);
 }
 __kernel void quantizer_test(CONST int *indices, __global const DataType *in, __global DataType *out)
 {
@@ -337,7 +352,7 @@ __kernel void loss_MSE		(CONST int *indices, __global const DataType *s1, __glob
 	CONST ConvInfo *info=(CONST ConvInfo*)indices;
 
 	//if(idx<50)//DEBUG
-	//	printf("[[%d]] xhat %g x %g\n", idx, s1[idx], s2[idx]);//
+	//	printf("[[%d]] xhat " PRINT " x " PRINT "\n", idx, s1[idx], s2[idx]);//
 
 	diff[idx]=s1[idx]-s2[idx];
 }
@@ -363,5 +378,5 @@ __kernel void opt_adam		(CONST DataType *betas, __global const DataType *grad, _
 	params[idx]-=change;
 
 	//if(idx<50)//DEBUG
-	//	printf("[[%d]] param %g lr %g grad %g change %g\n", idx, params[idx], info->lr, grad[idx], change);//
+	//	printf("[[%d]] param " PRINT " lr " PRINT " grad " PRINT " change " PRINT "\n", idx, params[idx], info->lr, grad[idx], change);//
 }

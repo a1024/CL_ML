@@ -24,19 +24,21 @@ int				file_is_readable(const char *filename)//0: not readable, 1: regular file,
 		return 1+!S_ISREG(info.st_mode);
 	return 0;
 }
-ArrayHandle		load_text(const char *filename, int pad)
+ArrayHandle		load_file(const char *filename, int bin, int pad)
 {
 	struct stat info={0};
 	FILE *f;
 	ArrayHandle str;
-
+	char mode[4]={'r'};
 	int error=stat(filename, &info);
 	if(error)
 	{
 		LOG_ERROR("Cannot open %s\n%s", filename, strerror(errno));
 		return 0;
 	}
-	f=fopen(filename, "r");
+	if(bin)
+		mode[1]='b';
+	f=fopen(filename, mode);
 
 	str=array_construct(0, 1, info.st_size, 1, pad+1, 0);
 	str->count=fread(str->data, 1, info.st_size, f);

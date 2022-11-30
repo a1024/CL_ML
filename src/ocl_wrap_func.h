@@ -9,6 +9,9 @@ OPENCL_FUNC(clReleaseContext);
 OPENCL_FUNC(clRetainContext);
 OPENCL_FUNC(clGetContextInfo);
 OPENCL_FUNC(clCreateCommandQueue);
+#if CL_TARGET_OPENCL_VERSION>=200
+OPENCL_FUNC(clCreateCommandQueueWithProperties);
+#endif
 OPENCL_FUNC(clCreateProgramWithSource);
 OPENCL_FUNC(clBuildProgram);
 OPENCL_FUNC(clGetProgramBuildInfo);

@@ -1,12 +1,12 @@
 #pragma once
 #ifndef INC_OCL_WRAP_H
 #define INC_OCL_WRAP_H
+#define	CL_TARGET_OPENCL_VERSION	300//120
+#include<CL/opencl.h>
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-#define	CL_TARGET_OPENCL_VERSION	120
-#include<CL/opencl.h>
 
 
 #ifdef _MSC_VER
@@ -22,6 +22,9 @@ typedef cl_int			(*CL_API_CALL t_clReleaseContext)(cl_context context);
 typedef cl_int			(*CL_API_CALL t_clRetainContext)(cl_context context);
 typedef cl_int			(*CL_API_CALL t_clGetContextInfo)(cl_context context, cl_context_info param_name, size_t param_value_size, void *param_value, size_t *param_value_size_ret);
 typedef cl_command_queue(*CL_API_CALL t_clCreateCommandQueue)(cl_context context, cl_device_id device, cl_command_queue_properties properties, cl_int *errcode_ret);
+#if CL_TARGET_OPENCL_VERSION>=200
+typedef cl_command_queue(*CL_API_CALL t_clCreateCommandQueueWithProperties)(cl_context context, cl_device_id device, const cl_queue_properties *properties, cl_int *errcode_ret);
+#endif
 typedef cl_program		(*CL_API_CALL t_clCreateProgramWithSource)(cl_context context, cl_uint count, const char **strings, const size_t *lengths, cl_int *errcode_ret);
 typedef cl_int			(*CL_API_CALL t_clBuildProgram)(cl_program program, cl_uint num_devices, const cl_device_id *device_list, const char *options, void (CL_CALLBACK *pfn_notify)(cl_program program, void *user_data), void *user_data);
 typedef cl_int			(*CL_API_CALL t_clGetProgramBuildInfo)(cl_program program, cl_device_id device, cl_program_build_info param_name, size_t param_value_size, void *param_value, size_t *param_value_size_ret);

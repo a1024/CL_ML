@@ -8,7 +8,7 @@ extern "C"
 #include"array.h"
 
 int				file_is_readable(const char *filename);//0: not readable, 1: regular file, 2: folder
-ArrayHandle		load_text(const char *filename, int pad);
+ArrayHandle		load_file(const char *filename, int bin, int pad);
 int				save_text(const char *filename, const char *text, size_t len);
 
 
