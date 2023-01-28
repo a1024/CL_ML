@@ -40,21 +40,24 @@ from datetime import timedelta
 #name		params	sec/epoch	RMSE@100
 #T11-D32W48-VR	1309171	 6.0053514	35.720994738894
 #T12-D32W48-VR	1262694	 6.734627	22.315794696987
+#T13-D32W64-VR	2236550	 6.9581052	18.448459926056
+
+#T14-dnsmp	1057987	 6.78087	16.617747337010		//5185731  9346368 params
 
 
 
 
 ## config ##
-import transform12 as currenttransform
-modelname='T12'
+import transform14 as currenttransform
+modelname='T14'
 pretrained=1	# when changing model design, rename old saved model, then assign pretrained=0 for first train
 save_records=0
 
-epochs=100
+epochs=600
 batch_size=24	# increase batch size instead of decreasing learning rate
 lr=0.001
 
-clip_grad=0	# enable if got nan
+clip_grad=1	# enable if got nan
 use_adam=1	# disable if got nan
 use_flickr_dataset=0
 
@@ -92,7 +95,7 @@ def cropTL(image):
 	return torchvision.transforms.functional.crop(image, 0, 0, 64, 64)
 
 def ensureChannels(x):
-	if x.size(0)==1:
+	if x.shape[0]==1:
 		x=x.repeat([3, 1, 1])
 	global device
 	x=x.to(device)
@@ -213,57 +216,36 @@ class CompressorNet(nn.Module):
 		self.upsample2=nn.Upsample(scale_factor=2, mode='bilinear')
 		self.upsample4=nn.Upsample(scale_factor=4, mode='bilinear')
 		self.upsample_nearest=nn.Upsample(scale_factor=2)
+		self.act=nn.ReLU()
 
 		self.transform=currenttransform.NLTransform()
 
 	def forward(self, x):
-		option=np.random.randint(self.transform.nOptions)
+		nbits=np.random.randint(self.transform.nOptions)+1
+		#bpp=self.transform.get_bpp(nbits)
 
-		rate, nbits, downsample=self.transform.prep_rate(option, x.shape, device)
+		x=self.transform.encode(x, nbits, device)
 
-		x=self.transform.encode(x, rate)
-
-		if downsample==2:
-			x=self.avpool4(x)
-		elif downsample==1:
-			x=self.avpool2(x)
 		x+=torch.mul(self.qnoise.sample(x.shape).to(self.device), 1/(1<<(nbits-1)))# add quantization noise and clamp [0, 1]
-		x=torch.clamp(x, min=0, max=1)
-		if downsample==2:
-			x=self.upsample4(x)
-		elif downsample==1:
-			x=self.upsample2(x)
+		y=torch.clamp(x, min=0, max=1)
 
-		x=self.transform.decode(x, rate)
-		return x, nbits, downsample
+		x=self.transform.decode(y, nbits, device)
+		return x, y, nbits
 	
-	# option: {0, ...31}	== downsample<<3 | nbits
-	# returns xhat, latent_y, BPP
-	def test(self, x, option):
+	def test(self, x, nbits):
 		with torch.no_grad():
-			rate, nbits, downsample=self.transform.prep_rate(option, x.shape, device)
-			amplitude=1<<(nbits-1)
+			#bpp=self.transform.get_bpp(nbits)
+			amplitude=1<<nbits
 			invamp=1/amplitude
 
-			y=self.transform.encode(x, rate)
+			y=self.transform.encode(x, nbits, device)
 
-			if downsample==2:
-				y=self.avpool4(y)
-			elif downsample==1:
-				y=self.avpool2(y)
 			y=torch.clamp(torch.round(y*amplitude), min=0, max=amplitude)# round and clamp to [0, 2^nbits-1]
-			if downsample==2:
-				x=self.upsample4(y)
-				y=self.upsample_nearest(y)
-				y=self.upsample_nearest(y)
-			elif downsample==1:
-				x=self.upsample2(y)
-				y=self.upsample_nearest(y)
-			x=torch.mul(x, invamp)
+			x=torch.mul(y, invamp)
 
-			x=self.transform.decode(x, rate)
-		
-		return x, y, nbits/(1<<(downsample)), nbits, downsample
+			x=self.transform.decode(x, nbits, device)
+
+		return x, y
 
 #dataset average dimensions:
 #		samples		width/8		height/8	mindim
@@ -300,6 +282,14 @@ loss_func=nn.MSELoss()
 
 start=time.time()
 
+def calc_loss(x, y, xhat, nbits):
+	R=torch.mean(torch.log2(torch.add(model.act(y), 1)))	# rate (bits per latent code)
+	D=torch.sqrt(loss_func(xhat, x))			# distortion (RMSE)
+
+	L=torch.mul(R, 0.125/nbits)+20*torch.log10(D)		# 0.125 is an average slope from the R-D graph
+
+	return L, R.item()*y.nelement()/x.nelement(), 255*D.item()
+
 min_loss=-1
 rmse=0
 nbatches=train_size/batch_size
@@ -307,43 +297,39 @@ for epoch in range(epochs):
 	progress=0
 	rmse=0
 	av_bpp=0
-	for x in train_loader:#train loop
+	for x in train_loader:#TRAIN loop
 		if use_cuda:
 			with torch.cuda.amp.autocast(dtype=torch.float16):#https://pytorch.org/docs/master/notes/amp_examples.html
-				xhat, nbits, downsample=model(x)		#1 forward
-				J=loss_func(xhat, x)	#2 compute the objective function
+				xhat, y, nbits=model(x)
+				L, current_bpp, current_rmse=calc_loss(x, y, xhat, nbits)	#1 compute the objective function forward
 		else:
-			xhat, nbits, downsample=model(x)
-			J=loss_func(xhat, x)
-		
-		current_mse=J.item()
-		current_mse=255*math.sqrt(current_mse)
+			xhat, y, nbits=model(x)
+			L, current_bpp, current_rmse=calc_loss(x, y, xhat, nbits)
 
-		if not math.isfinite(current_mse):
-			print('current_mse=%f. ABORTING.\t\t'%current_mse)
+		if not math.isfinite(L.item()):
+			print('Loss=%f. ABORTING.\t\t'%L.item())
 			exit(0)
-		rmse+=current_mse
-
-		model.zero_grad()	#3 cleaning the gradients
+		
+		model.zero_grad()			#2 cleaning the gradients
 		if use_cuda:
-			scaler.scale(J).backward()
+			scaler.scale(L).backward()	#3 accumulate the partial derivatives of L wrt params
 
-			if clip_grad:		#clip gradient to avoid nan	https://discuss.pytorch.org/t/gradient-clipping-with-torch-cuda-amp/88359/2
+			if clip_grad:			#4 clip gradient to avoid nan	https://discuss.pytorch.org/t/gradient-clipping-with-torch-cuda-amp/88359/2
 				scaler.unscale_(optimizer)
 				torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10)
 
-			scaler.step(optimizer)
+			scaler.step(optimizer)		#5 step in the opposite direction of the gradient
 			scaler.update()
 		else:
-			J.backward()		#4 accumulate the partial derivatives of J wrt params
+			L.backward()
 			if clip_grad:
 				torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10)
-			optimizer.step()	#5 step in the opposite direction of the gradient
+			optimizer.step()
 
 		progress+=x.size(0)
-		current_bpp=nbits/(1<<downsample)
+		rmse+=current_rmse
 		av_bpp+=current_bpp
-		print('%d/%d = %5.2f%% RMSE %16.12f  %f BPP\t\t'%(progress, train_size, 100*progress/train_size, current_mse, current_bpp), end='\r')
+		print('%d/%d = %5.2f%%  %2d bit %9f BPP  RMSE %16.12f\t\t'%(progress, train_size, 100*progress/train_size, nbits, current_bpp, current_rmse), end='\r')
 
 	to_save=not save_records
 	record=''
@@ -360,7 +346,7 @@ for epoch in range(epochs):
 	rmse/=nbatches
 	av_bpp/=nbatches
 	psnr=20*math.log10(255/rmse)
-	print('Epoch %3d RMSE %16.12f PSNR %13.9f  %5.3f BPP elapsed %10f'%(epoch+1, rmse, psnr, av_bpp, (t2-start)/60), end=' ')
+	print('Epoch %3d  %9.6f BPP  RMSE %16.12f PSNR %13.9f  elapsed %10f '%(epoch+1, av_bpp, rmse, psnr, (t2-start)/60), end='')
 	print(str(timedelta(seconds=t2-start))+record)
 
 end=time.time()
@@ -373,37 +359,33 @@ torch.save(model.state_dict(), '%s-%s-rmse%.9f.pth.tar'%(modelname, time.strftim
 elapsed=0
 test_loss=0
 test_batches=0
-for x in test_loader:
+for x in test_loader:#TEST loop
 	sample=None
 	result=None
 	for option in range(model.transform.nOptions):
+		nbits=option+1
 		t1=time.time()
-		xhat, y, BPP, nbits, downsample=model.test(x, option)
+		xhat, y=model.test(x, nbits)
 		t2=time.time()
 		elapsed=t2-t1
-		amplitude=1<<(nbits-1)
-		invamp=1/amplitude
 
 		with torch.no_grad():
-			J=loss_func(xhat, x)
-			current_loss=J.item()
-			current_loss=255*math.sqrt(current_loss)
-			test_loss+=current_loss
+			L, current_bpp, current_rmse=calc_loss(x, y, xhat, nbits)
+
+			test_loss+=current_rmse
 			test_batches+=1
 
-			sample_hi=torch.cat((x, xhat), dim=3)			#x,    xhat
-			sample_lo=torch.cat((y*invamp, x-xhat+0.5), dim=3)	#code, diff
-			sample=torch.cat((sample_hi, sample_lo), dim=2)
+			sample=torch.cat((xhat, x-xhat+0.5), dim=3)	#x, [xhat, diff ...]
 
-		if result==None:
-			result=torch.empty(sample.shape[0], sample.shape[1], sample.shape[2], 0)
-		result=torch.cat((result, sample.cpu()), dim=3)
+			if result==None:
+				result=torch.empty(sample.shape[0], sample.shape[1], sample.shape[2], 0)
+				result=torch.cat((result, x.cpu()), dim=3)
+			result=torch.cat((result, sample.cpu()), dim=3)
 
-	save_tensor_as_grid(result, 1, 'results/%s-%s-%f.PNG'%(modelname, time.strftime("%Y%m%d-%H%M%S"), current_loss))# Kodak dataset: one batch of 24 images
+		print('opt %2d  %9f BPP RMSE %16.12f PSNR %13.9f  elapsed %s'%(nbits, current_bpp, current_rmse, 20*math.log10(255/current_rmse), str(timedelta(seconds=elapsed))))
 
-elapsed_str=str(timedelta(seconds=elapsed))
-if test_batches!=0:
-	test_loss/=test_batches
-	elapsed/=test_size
-print('Test RMSE %.12f PSNR %13.9f elapsed %s (%f per sample)'%(test_loss, 20*math.log10(255/test_loss), elapsed_str, elapsed))
+	if test_batches:
+		fn='results/%s-%s-%f.PNG'%(modelname, time.strftime("%Y%m%d-%H%M%S"), test_loss/test_batches)
+		save_tensor_as_grid(result, 1, fn)
+		print('Saved '+fn)
 
