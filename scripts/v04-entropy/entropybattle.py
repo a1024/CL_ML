@@ -1,4 +1,4 @@
-#2023-02-01We
+#2023-02-14Tu
 import os
 from PIL import Image
 import math
@@ -50,21 +50,30 @@ from torchsummary import summary
 
 #name			params		sec/epoch	train@100		best test
 #C01-multires		5890433		16.131165	stuck
-#C02-simple		1087302		//2239046 stuck
-#C03-trivial		 305382		 7.3799532	 9.158906909376		//669926 stuck		game on
+#C02-simple		1087302				stuck			//2239046 stuck
+#C03-trivial		 305382		 7.3799532	 9.158906909376		game on			//669926 stuck
 #C04-W64D15		 189420		 8.4128634	12.934512204576		checkboard pattern
-#C05-W256D12		1523635		14.0388084	 9.447993428465
+#C05-W256D12		1523635		14.0388084	 9.447993428465		blurry
+#C06-W128D15		1282953		 5.9219958	 6.521447350921		8bit,lambda=0: crisp but bad color, 2bit,lambda=0.001: noisy @1000 QUANTIZE INSTEAD OF ADDING NOISE
+
+#C07-pred		 695183		17.725816	24.395361444897		PSNR 18.85  BPP 1.66 (0.444 bypass)  @500 lambda 0.0001  no color
+
+#C08-3bit		 428891		 5.7715668	15.347845008896		checkboard @200
+#C09-heavy		 851216		 7.444292	21.186716620891		PSNR 16.66  BPP 0.1172  @1000 lambda 0.0001  low freq noise, checkboard	//checkboard @100
+#C10-upsmp		 701456		 7.871121	20.871285020741		PSNR 16.37  BPP 0.1176  @1000	pixelated
+#C11-3c			 902976		 9.3268104	15.434808229835		PSNR 17.23  BPP 0.3260  @200	PSNR 16.93 BPP 0.2145 @1400 grainy banding
+#C12-8c			 999820		10.4657478	12.186279430929		PSNR 17.01  BPP 0.4786  @200 grainy banding
 
 
 
 
 ## config ##
-import codec05 as currentcodec
-modelname='C05'
+import codec12 as currentcodec
+modelname='C12'
 pretrained=1	# when changing model design, rename old saved model, then assign pretrained=0 for first train
 save_records=0
 
-epochs=100
+epochs=200
 lr=0.001	#always start with high rate
 batch_size=32	# <=24, increase batch size instead of decreasing learning rate
 train_block=64
@@ -76,8 +85,8 @@ use_flickr_dataset=0
 model_summary=0
 debug_model=0
 
-g_add_rate_to_loss=0.01
-g_rate=8
+g_rate=1
+g_rate_factor=0.0001
 
 
 
@@ -156,6 +165,7 @@ class CompressorModel(nn.Module):
 		global g_rate
 		nlevels=1<<g_rate
 		invamp=1/(nlevels-1)
+
 		y=self.codec.encode(x)
 
 		if type(y) is list:
@@ -172,9 +182,39 @@ class CompressorModel(nn.Module):
 			yhat=torch.clamp(yhat, min=0, max=nlevels-1)
 			y=torch.mul(yhat, invamp)
 
+		#cbits=self.codec.predict(yhat)
+
 		xhat=self.codec.decode(y)
 
-		return yhat, xhat
+		#return xhat, cbits
+		return xhat, yhat
+
+	def test(self, x):
+		global g_rate
+		nlevels=1<<g_rate
+		invamp=1/(nlevels-1)
+
+		y=self.codec.encode(x)
+
+		if type(y) is list:
+			yhat=[]
+			for idx in range(len(y)):
+				y[idx]=torch.mul(y[idx], nlevels-1)#variable amplitude
+				y[idx]=torch.round(y[idx])
+				y[idx]=torch.clamp(y[idx], min=0, max=nlevels-1)
+				yhat.append(y[idx])
+				y[idx]=torch.mul(y[idx], invamp)
+		else:
+			yhat=torch.mul(y, nlevels-1)
+			yhat=torch.torch.round(yhat)
+			yhat=torch.clamp(yhat, min=0, max=nlevels-1)
+			y=torch.mul(yhat, invamp)
+
+		#cbits=self.codec.predict(yhat)
+
+		xhat=self.codec.decode(y)
+
+		return xhat, yhat#, cbits*0.125
 
 
 def load_model(model, filename):#https://github.com/liujiaheng/compression
@@ -274,9 +314,8 @@ loss_func=nn.MSELoss()
 
 
 
-def calc_entropy(x):
-	global g_rate
-	nlevels=1<<g_rate
+def calc_entropy(x, nbits):
+	nlevels=1<<nbits
 	x=(torch.round(x)+0.5).flatten().cpu().numpy().astype(np.uint8)
 	hist, bins=np.histogram(x, bins=nlevels, range=(0, nlevels))
 	entropy=0
@@ -285,7 +324,7 @@ def calc_entropy(x):
 		if freq!=0:
 			prob=freq*den
 			entropy+=-prob*np.log2(prob)
-	entropy/=g_rate
+	entropy/=nbits
 	return entropy
 
 def calc_entropy_differentiable(x):
@@ -300,27 +339,67 @@ def calc_entropy_differentiable(x):
 		term=-prob*torch.log2(prob)
 		term=torch.nan_to_num(term, nan=0, posinf=0, neginf=0)
 		entropy+=term
-	entropy*=1/g_rate
 	entropy=torch.mean(entropy)
+	entropy*=1/g_rate
+	return entropy
+
+#class DiffEntropy(nn.Module):
+#	def __init__(self):
+#		self.conv=nn.Conv2d(3, 3, 2, 2, 0, bias=False)
+#		for param in self.conv.parameters:
+
+def calc_groupentropy(x):
+	weight_POT=torch.tensor([[[[1, 2, 4, 8], [16, 32, 64, 128]]]], dtype=x.dtype, device=x.device).expand(x.shape[1], -1, -1, -1)
+	x=nn.functional.conv2d(x, weight_POT, stride=(2, 4), groups=x.shape[1])
+
+	x=(torch.round(x)+0.5).flatten().cpu().numpy().astype(np.uint8)
+	hist, bins=np.histogram(x, bins=256, range=(0, 256))
+	entropy=0
+	den=1/x.size
+	for freq in hist:
+		if freq!=0:
+			prob=freq*den
+			entropy-=prob*np.log2(prob)
+	entropy*=0.125
+	return entropy
+
+def calc_pairwiseentropy_differentiable(x):#for binary masks only
+	weight_POT=torch.tensor([[[[1, 2], [4, 8]]]], dtype=x.dtype, device=x.device).expand(x.shape[1], -1, -1, -1)
+	x=nn.functional.conv2d(x, weight_POT, stride=2, groups=x.shape[1])
+	
+	den=1/(x.shape[2]*x.shape[3])
+	entropy=torch.zeros([x.shape[0], x.shape[1]], device=x.device)
+	for sym in range(16):#https://github.com/hyk1996/pytorch-differentiable-histogram/blob/master/differentiable_histogram.py
+		prob=torch.relu(1-(x-sym).abs())#https://stackoverflow.com/questions/59850816/how-to-implement-tent-activation-function-in-pytorch
+		prob=torch.sum(prob, dim=[2, 3])
+		prob*=den
+		term=-prob*torch.log2(prob)
+		term=torch.nan_to_num(term, nan=0, posinf=0, neginf=0)
+		entropy+=term
+	entropy=torch.mean(entropy)
+	entropy*=0.25
 	return entropy
 
 def calc_loss(x):
-	yhat, xhat=model(x)
+	#global g_rate
+	#xhat, cbits=model(x)
+	#E=cbits*(g_rate/(8*x.nelement()))
 
+	xhat, yhat=model(x)
 	if type(yhat) is list:
 		E=torch.zeros(1, device=x.device)
-		nelem=0
 		for yk in yhat:
-			E+=calc_entropy_differentiable(yk)*yk.nelement()
-			nelem+=yk.nelement()
-		E*=1/nelem
+			E+=calc_pairwiseentropy_differentiable(yk)*yk.nelement()
+			#E+=calc_entropy_differentiable(yk)*yk.nelement()
 	else:
-		E=calc_entropy_differentiable(yhat)
+		E=calc_pairwiseentropy_differentiable(yhat)*yhat.nelement()
+		#E=calc_entropy_differentiable(yhat)*yhat.nelement()
+	E*=g_rate/(x.nelement()*8)
 
 	D=loss_func(x, xhat)
 
-	if g_add_rate_to_loss:
-		L=D+g_add_rate_to_loss*E
+	if g_rate_factor:
+		L=D+g_rate_factor*E
 	else:
 		L=D
 
@@ -376,7 +455,7 @@ for epoch in range(epochs):
 		rmse+=current_rmse
 		ratio+=current_ratio
 
-		print('%d/%d = %5.2f%%  RMSE %16.12f ratio %14.12f\t\t'%(progress, train_size, 100*progress/train_size, current_rmse, current_ratio), end='\r')
+		print('%d/%d = %5.2f%%  RMSE %16.12f BPP %14.12f\t\t'%(progress, train_size, 100*progress/train_size, current_rmse, 8/current_ratio), end='\r')
 	rmse/=nbatches
 	ratio/=nbatches
 
@@ -402,7 +481,7 @@ for epoch in range(epochs):
 	distance_prev=distance_current
 
 	psnr=20*math.log10(255/rmse)
-	print('Epoch %3d [%10f,%10f]  RMSE %16.12f PSNR %13.9f ratio %13.9f  elapsed %10f '%(epoch+1, distance_current, distance_delta, rmse, psnr, ratio, (t2-start)/60), end='')
+	print('Epoch %3d [%10f,%10f]  RMSE %16.12f PSNR %13.9f BPP %12.9f  elapsed %10f '%(epoch+1, distance_current, distance_delta, rmse, psnr, 8/ratio, (t2-start)/60), end='')
 	print(str(timedelta(seconds=t2-start))+record)
 
 end=time.time()
@@ -411,7 +490,7 @@ print('Train elapsed: '+str(timedelta(seconds=end-start)))
 if epochs:
 	if save_records:
 		load_model(model, modelname+'.pth.tar')
-	torch.save(model.state_dict(), '%s-%s-psnr%f-bpp%f.pth.tar'%(modelname, time.strftime('%Y%m%d-%H%M%S'), 20*math.log10(255/rmse), g_rate/ratio))
+	torch.save(model.state_dict(), '%s-%s-psnr%f-bpp%f.pth.tar'%(modelname, time.strftime('%Y%m%d-%H%M%S'), 20*math.log10(255/rmse), 8/ratio))
 
 
 test_idx=0
@@ -423,8 +502,8 @@ t_filt=0
 for x in test_loader:#TEST loop
 	with torch.no_grad():
 		t1=time.time()
-
-		yhat, xhat=model(x)
+		#xhat, yhat, current_csize0=model.test(x)
+		xhat, yhat=model.test(x)
 		t2=time.time()
 
 		current_rmse=255*math.sqrt(loss_func(x, xhat).item())
@@ -434,21 +513,44 @@ for x in test_loader:#TEST loop
 		if type(yhat) is list:
 			current_csize0=0
 			for yk in yhat:
-				entropy=calc_entropy(yk)
-				current_csize0+=math.ceil(entropy*yk.nelement())
+				if g_rate==1:
+					entropy=calc_groupentropy(yk)
+				else:
+					entropy=calc_entropy(yk, g_rate)
+				current_csize0+=math.ceil(entropy*yk.nelement()*g_rate/8)
 		else:
-			current_csize0=math.ceil(calc_entropy(yhat)*yhat.nelement())
+			if g_rate==1:
+				entropy=calc_groupentropy(yhat)
+			else:
+				entropy=calc_entropy(yhat, g_rate)
+			current_csize0=math.ceil(entropy*yhat.nelement()*g_rate/8)
 
-		diff=x-xhat+0.5
-		entropy=calc_entropy(255*diff)
+		diff=x-xhat
+		entropy=calc_entropy(torch.abs(diff*2), 8)
 		current_csize1=current_csize0+math.ceil(x.nelement()*entropy)
 
-		print('Test %2d rmse %16.12f psnr %13.9f lossy %7d %16.12f lossless %7d %16.12f elapsed %9f'%(test_idx+1, current_rmse, 20*math.log10(255/current_rmse), current_csize0, current_usize/current_csize0, current_csize1, current_usize/current_csize1, t2-t1))
+		current_psnr=20*math.log10(255/current_rmse)
+		print('Test %2d  rmse %16.12f psnr %13.9f  lossy %7d BPP %16.12f  lossless %7d BPP %16.12f  elapsed %9f'%(test_idx+1, current_rmse, current_psnr, current_csize0, current_csize0*8/current_usize, current_csize1, current_csize1*8/current_usize, t2-t1))
 
 		if test_idx+1==21:
-			sample=torch.cat((x, xhat, diff), dim=3)
-			fn='results/%s-%s-%d-%f-%f.PNG'%(modelname, time.strftime('%Y%m%d-%H%M%S'), test_idx+1, current_rmse, current_usize/current_csize0)
-			save_tensor_as_grid(sample, 1, fn)
+			sample=torch.cat((x, xhat, diff+0.5), dim=3)
+			current_bpp=current_csize0*8/current_usize
+			fn='%s-%s-%d'%(modelname, time.strftime('%Y%m%d-%H%M%S'), test_idx+1)
+			save_tensor_as_grid(sample, 1, 'results/'+fn+'-psnr%f-bpp%f.PNG'%(current_psnr, current_bpp))
+			if type(yhat) is list:
+				save_idx=0
+				for yk in yhat:
+					if yk.shape[1]>3:
+						yk=torch.transpose(yk, 0, 1)#this assumes batch size of 1
+						#yk=torch.reshape(yk, [yk.shape[1]//3, 3, yk.shape[2], yk.shape[3]])
+					#elif yk.shape[1]==1:
+					#	yk=torch.cat((yk, yk, yk), dim=1)
+					save_tensor_as_grid(yk, 4, 'results/'+fn+'-L%d.PNG'%save_idx)
+					save_idx+=1
+			else:
+				if yhat.shape[1]>3:
+					yhat=torch.transpose(yhat, 0, 1)#this assumes batch size of 1
+				save_tensor_as_grid(yhat, 4, 'results/'+fn+'-L.PNG')
 		usize+=current_usize
 		csize0+=current_csize0
 		csize1+=current_csize1
@@ -458,8 +560,8 @@ for x in test_loader:#TEST loop
 
 if test_idx:
 	rmse/=test_idx
-	print('Average rmse %16.12f psnr %13.9f size %7d lossy %7d %16.12f lossless %7d %16.12f filt %f sec'%(rmse, 20*math.log10(255/rmse), usize/test_idx, csize0/test_idx, usize/csize0, csize1/test_idx, usize/csize1, t_filt/test_idx))
-
+	print('Average rmse %16.12f psnr %13.9f  size %7d lossy %7d BPP %13.9f  lossless %7d BPP %13.9f  filt %f sec'%(rmse, 20*math.log10(255/rmse), usize/test_idx, csize0/test_idx, csize0*8/usize, csize1/test_idx, csize1*8/usize, t_filt/test_idx))
+print('Finished on '+time.strftime('%Y%m%d-%H%M%S'))
 
 
 
