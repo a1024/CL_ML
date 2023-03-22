@@ -101,13 +101,13 @@ save_records=0
 
 epochs=5
 lr=0.001		#always start with high learning rate
-batch_size=8		# <=24, increase batch size instead of decreasing learning rate
-train_block=256
-cache_rebuild=0		#set to 1 if train_block was changed
+batch_size=1		# <=24, increase batch size instead of decreasing learning rate
+train_block=0		#256: batch_size=8
+cache_rebuild=1		#set to 1 if train_block was changed
 #use_dataset='awm'	#'flickr' / 'clic' / 'awm' / 'kodak' / 'caltech' / 'imagenet'
 
 clip_grad=1		# enable if got nan
-use_SGD=0		# enable if got nan
+use_SGD=1		# enable if got nan
 model_summary=0
 debug_model=0
 regularization=0	# increase if overfit
@@ -115,9 +115,9 @@ regularization=0	# increase if overfit
 g_rate=8
 #g_rate_factor=0.001
 
-path_train='E:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
+#path_train='E:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 #path_train='E:/ML/dataset-CLIC-small'
-#path_train='E:/ML/dataset-AWM-small'
+path_train='E:/ML/dataset-AWM-small'
 
 
 
@@ -129,7 +129,7 @@ if torch.cuda.is_available() and torch.cuda.device_count()>0:
 	device_name='cuda:0'
 else:
 	use_cuda=0
-print('%s, LR=%f, Batch=%d, Records=%d, SGD=%d, dataset=\'%s\''%(device_name, lr, batch_size, save_records, use_SGD, path_train))
+print('Started on %s, %s, LR=%f, Batch=%d, Records=%d, SGD=%d, dataset=\'%s\''%(time.strftime('%Y-%m-%d-%H:%M:%S'), device_name, lr, batch_size, save_records, use_SGD, path_train))
 device=torch.device(device_name)
 
 if debug_model:#https://stackoverflow.com/questions/61397176/how-to-keep-matplotlib-from-stealing-focus
@@ -147,6 +147,10 @@ def ensureChannels(x):
 	return x
 
 def get_filenames(path, is_test):
+	minw=0
+	maxw=0
+	minh=0
+	maxh=0
 	filenames=[]
 	for root, dirs, files in os.walk(path):
 		for name in files:
@@ -154,16 +158,27 @@ def get_filenames(path, is_test):
 			try:
 				with Image.open(fn) as im:
 					width, height=im.size
-					if width>=train_block and height>=train_block:
+
+					if (train_block!=0 and width>=train_block and height>=train_block) or (is_test or width<=512 and height<=512):
 						filenames.append(fn)
 
 						count=len(filenames)
 						if is_test==0 and count%128==0:
 							print('Found %d applicable samples'%(count+1), end='\r')
+
+						if minw==0 or minw>width:
+							minw=width
+						if maxw==0 or maxw<width:
+							maxw=width
+						if minh==0 or minh>height:
+							minh=height
+						if maxh==0 or maxh<height:
+							maxh=height
 			except:
 				continue
 	if is_test==0:
 		print('Found %d applicable samples'%len(filenames))
+		print('dimensions: %dx%d ~ %dx%d'%(minw, minh, maxw, maxh))
 	return filenames
 
 class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
@@ -207,10 +222,16 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 				torchvision.transforms.ToTensor(),
 				torchvision.transforms.Lambda(ensureChannels)
 			])
-		else:#train
+		elif train_block!=0:#train
 			self.transforms_x=torchvision.transforms.Compose([
 				#torchvision.transforms.Resize(train_block),#
 				torchvision.transforms.RandomCrop(train_block),
+				torchvision.transforms.RandomHorizontalFlip(),
+				torchvision.transforms.ToTensor(),
+				torchvision.transforms.Lambda(ensureChannels)
+			])
+		else:#train 1:1, batch_size=1
+			self.transforms_x=torchvision.transforms.Compose([
 				torchvision.transforms.RandomHorizontalFlip(),
 				torchvision.transforms.ToTensor(),
 				torchvision.transforms.Lambda(ensureChannels)
@@ -224,7 +245,7 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 
 	def __getitem__(self, index):
 		if index>=len(self.filenames):
-			return 0
+			return None
 		image_x=Image.open(self.filenames[index])
 		image_x=self.transforms_x(image_x)
 		#image_x=image_x.to(device)#https://stackoverflow.com/questions/53998282/how-does-the-number-of-workers-parameter-in-pytorch-dataloader-actually-work
@@ -661,7 +682,7 @@ for epoch in range(epochs):
 		#rmse+=current_rmse
 		#ratio+=current_ratio
 
-		print('%d/%d = %5.2f%%  CR %16.12f BPP %14.12f bitsize %10.2f / %10d\t\t'%(progress, train_size, 100*progress/train_size, current_ratio, 8/current_ratio, L.item(), truth.nelement()<<3), end='\r')
+		print('%d/%d = %5.2f%%  CR %16.12f BPP %14.12f bitsize %10.2f / %10d\t\t...'%(progress, train_size, 100*progress/train_size, current_ratio, 8/current_ratio, L.item(), truth.nelement()<<3), end='\r')
 		#print('%d/%d = %5.2f%%  RMSE %16.12f BPP %14.12f\t\t'%(progress, train_size, 100*progress/train_size, current_rmse, 8/current_ratio), end='\r')
 	#rmse/=nbatches
 	ratio/=nbatches
@@ -800,7 +821,7 @@ if test_idx:
 	print('Average  CR %16.12f BPP %13.9f  filt %f sec'%(ratio, 8/ratio, t_filt/test_idx))
 	#rmse/=test_idx
 	#print('Average rmse %16.12f psnr %13.9f  size %7d lossy %7d BPP %13.9f  lossless %7d BPP %13.9f  filt %f sec'%(rmse, 20*math.log10(255/rmse), usize/test_idx, csize0/test_idx, csize0*8/usize, csize1/test_idx, csize1*8/usize, t_filt/test_idx))
-print('Finished on '+time.strftime('%Y%m%d-%H%M%S'))
+print('Finished on '+time.strftime('%Y-%m-%d-%H:%M:%S'))
 
 
 
