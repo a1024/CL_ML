@@ -110,6 +110,7 @@ from torchsummary import summary
 #C35-W32D08-per-px	 107640		 97.671703@CLIC@1	2.537100@180	2.450299@146	2.199998@180			//2.119924@24 kodim21
 
 #C35-W32D08-per-px-erf	 107640
+#C36-W64D08	multiple Gaussians
 
 
 
@@ -120,7 +121,7 @@ modelname='C35'
 pretrained=0	# assign pretrained=0 when training first time
 save_records=0
 
-epochs=10
+epochs=50
 lr=0.001		#always start with high learning rate 0.001
 batch_size=1		# <=24, increase batch size instead of decreasing learning rate
 train_block=0		#256: batch_size=8
@@ -131,7 +132,7 @@ clip_grad=1		# enable if got nan
 use_SGD=0		# enable if got nan
 model_summary=0
 plot_grad=0		# 0 disabled   1 plot grad   2 plot log10 grad
-weight_decay=0.004	# increase if overfit
+weight_decay=0.003	# increase if overfit
 use_dropout=0
 
 g_rate=8
@@ -139,12 +140,14 @@ g_rate=8
 
 #path_train='E:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 #path_train='E:/ML/datasets-train/dataset-caltech256'
-path_train='E:/ML/dataset-CLIC'
+path_train='E:/ML/dataset-CLIC'	# best at 1:1
 #path_train='E:/ML/dataset-AWM'
 #path_train='E:/ML/dataset-CLIC-small'
 #path_train='E:/ML/dataset-AWM-small'
 #path_train='E:/ML/dataset-CLIC30'	#30 samples
+#path_train='E:/ML/dataset-natural'
 
+#path_val=None
 path_val='E:/ML/dataset-CLIC30'
 
 path_test='E:/ML/dataset-kodak'
@@ -296,19 +299,19 @@ class CompressorModel(nn.Module):
 
 		global device
 		self.wx=torch.tensor([
-			[[[1, -1]]],
-			[[[1, -1]]],
-			[[[1, -1]]]
+			[[[0.5, -0.5]]],
+			[[[0.5, -0.5]]],
+			[[[0.5, -0.5]]]
 		], dtype=torch.float, device=device)
 		self.wy=torch.tensor([
-			[[[1], [-1]]],
-			[[[1], [-1]]],
-			[[[1], [-1]]]
+			[[[0.5], [-0.5]]],
+			[[[0.5], [-0.5]]],
+			[[[0.5], [-0.5]]]
 		], dtype=torch.float, device=device)
 		self.wxy=torch.tensor([
-			[[[1, -1], [-1, 1]]],
-			[[[1, -1], [-1, 1]]],
-			[[[1, -1], [-1, 1]]]
+			[[[0.25, -0.25], [-0.25, 0.25]]],
+			[[[0.25, -0.25], [-0.25, 0.25]]],
+			[[[0.25, -0.25], [-0.25, 0.25]]]
 			], dtype=torch.float, device=device)
 
 		self.predx=currentcodec.Codec(use_dropout)
@@ -316,7 +319,6 @@ class CompressorModel(nn.Module):
 		self.predxy=currentcodec.Codec(use_dropout)
 
 	def forward(self, av, diffx, diffy, diffxy):
-		#av -> diffx -> diffy -> diffxy
 		x=nn.functional.pad(av, (0, 1, 0, 0))
 		x=nn.functional.conv2d(x, self.wx, groups=x.shape[1])
 		pred_diffx=self.predx.predict(x, diffx)
@@ -337,6 +339,16 @@ class CompressorModel(nn.Module):
 		pred=torch.cat((pred_diffx[0], pred_diffy[0], pred_diffxy[0]), dim=1)
 		conf=torch.cat((pred_diffx[1], pred_diffy[1], pred_diffxy[1]), dim=1)
 		return pred, conf
+
+		#pred0=torch.cat((pred_diffx[0], pred_diffy[0], pred_diffxy[0]), dim=1)
+		#pred1=torch.cat((pred_diffx[1], pred_diffy[1], pred_diffxy[1]), dim=1)
+		#pred2=torch.cat((pred_diffx[2], pred_diffy[2], pred_diffxy[2]), dim=1)
+		#pred3=torch.cat((pred_diffx[3], pred_diffy[3], pred_diffxy[3]), dim=1)
+		#conf0=torch.cat((pred_diffx[4], pred_diffy[4], pred_diffxy[4]), dim=1)
+		#conf1=torch.cat((pred_diffx[5], pred_diffy[5], pred_diffxy[5]), dim=1)
+		#conf2=torch.cat((pred_diffx[6], pred_diffy[6], pred_diffxy[6]), dim=1)
+		#conf3=torch.cat((pred_diffx[7], pred_diffy[7], pred_diffxy[7]), dim=1)
+		#return pred0, pred1, pred2, pred3, conf0, conf1, conf2, conf3
 
 
 	#	#av -> diffxy -> diffx -> diffy
@@ -601,7 +613,10 @@ dataset_train=GenericDataLoader(path_train, False)
 ##elif use_dataset=='imagenet':
 ##	dataset_train=torchvision.datasets.ImageNet('E:/ML/dataset-imagenet')
 
-dataset_val=GenericDataLoader(path_val, True)
+if path_val is None:
+	dataset_val=None
+else:
+	dataset_val=GenericDataLoader(path_val, True)
 
 dataset_test=GenericDataLoader(path_test, True)
 #dataset_test=GenericDataLoader('E:/ML/dataset-kodak-small', True)
@@ -622,33 +637,42 @@ loss_func=nn.MSELoss()
 
 
 
-def color_space_transform(x):
-	#ryz=torch.tensor([[[[1]], [[0]], [[0]]], [[[-1]], [[1]], [[0]]], [[[-1]], [[0]], [[1]]]], dtype=torch.float, device=x.device)
-	xgz=torch.tensor([[[[1]], [[-1]], [[0]]], [[[0]], [[1]], [[0]]], [[[0]], [[-1]], [[1]]]], dtype=torch.float, device=x.device)
-	#xyb=torch.tensor([[[[1]], [[-1]], [[0]]], [[[1]], [[1]], [[0]]], [[[0]], [[0]], [[1]]]], dtype=torch.float, device=x.device)
-	sq=torch.tensor([
-		[[[0.25, 0.25], [0.25, 0.25]]],	#average (top-left)
-		[[[0.5, -0.5], [0.5, -0.5]]],	#x-derivative (top-right)
-		[[[0.5, 0.5], [-0.5, -0.5]]],	#y-derivative (bottom-left)
-		[[[1, -1], [-1, 1]]],		#2D derivative (bottom-right)
+def color_space_transform(x):#3 channels [0, 1] -> 12 channels [-1, 1]
+	#RYZ
+	#color_weight=torch.tensor([[[[2]], [[0]], [[0]]],  [[[-1]], [[1]], [[0]]],  [[[-1]], [[0]], [[1]]]], dtype=torch.float, device=x.device)#RYZ
+	#color_bias=torch.tensor([-1, 0, 0], dtype=torch.float, device=x.device)
+
+	#XGZ
+	color_weight=torch.tensor([[[[1]], [[-1]], [[0]]],  [[[0]], [[2]], [[0]]],  [[[0]], [[-1]], [[1]]]], dtype=torch.float, device=x.device)#XGZ
+	color_bias=torch.tensor([0, -1, 0], dtype=torch.float, device=x.device)
+
+	#XYB
+	#color_weight=torch.tensor([[[[1]], [[-1]], [[0]]],  [[[1]], [[1]], [[0]]],  [[[0]], [[0]], [[2]]]], dtype=torch.float, device=x.device)#XYB
+	#color_bias=torch.tensor([0, -1, -1], dtype=torch.float, device=x.device)
+
+	squeeze_weight=torch.tensor([
+		[[[0.25, 0.25], [0.25, 0.25]]],		#average (top-left)
+		[[[0.25, -0.25], [0.25, -0.25]]],	#x-derivative (top-right)
+		[[[0.25, 0.25], [-0.25, -0.25]]],	#y-derivative (bottom-left)
+		[[[0.25, -0.25], [-0.25, 0.25]]],	#2D derivative (bottom-right)
 
 		[[[0.25, 0.25], [0.25, 0.25]]],
-		[[[0.5, -0.5], [0.5, -0.5]]],
-		[[[0.5, 0.5], [-0.5, -0.5]]],
-		[[[1, -1], [-1, 1]]],
+		[[[0.25, -0.25], [0.25, -0.25]]],
+		[[[0.25, 0.25], [-0.25, -0.25]]],
+		[[[0.25, -0.25], [-0.25, 0.25]]],
 
 		[[[0.25, 0.25], [0.25, 0.25]]],
-		[[[0.5, -0.5], [0.5, -0.5]]],
-		[[[0.5, 0.5], [-0.5, -0.5]]],
-		[[[1, -1], [-1, 1]]]
+		[[[0.25, -0.25], [0.25, -0.25]]],
+		[[[0.25, 0.25], [-0.25, -0.25]]],
+		[[[0.25, -0.25], [-0.25, 0.25]]]
 	], dtype=torch.float, device=x.device)
 
-	x=nn.functional.conv2d(x, xgz)
+	x=nn.functional.conv2d(x, color_weight, color_bias)
 	padR=x.shape[3]&1
 	padB=x.shape[2]&1
 	if padR or padB:
 		x=nn.functional.pad(x, (0, padR, 0, padB))
-	x=nn.functional.conv2d(x, sq, stride=2, groups=x.shape[1])
+	x=nn.functional.conv2d(x, squeeze_weight, stride=2, groups=x.shape[1])
 	return x
 
 def differentiate_xy(x):
@@ -744,31 +768,64 @@ def calc_pairwiseentropy_differentiable(x):#for binary masks only
 	#x*=two_over_256sqrtpi	#multiply f(x) by rectangle width = 1/256
 	#return x
 
-#def calc_rate3(x, mean, sdev):
-#	mean=torch.clamp(mean, -1, 1)
-#	sdev=torch.clamp(torch.abs(sdev), min=1e-3, max=None)
-#	loss=(x-mean)/sdev
-#	
-#	return loss, bitsize
+def calf_phi3(sym, mean0, mean1, mean2, mean3, conf0, conf1, conf2, conf3):
+	ret=torch.erf((sym-mean0)*conf0)+torch.erf((sym-mean1)*conf1)+torch.erf((sym-mean2)*conf2)+torch.erf((sym-mean3)*conf3)
+	return ret
 
-def calc_rate2(x, mean, sdev):#Zipf's law: bitsize = -log2(p)		p is truncated normal distribution
+def calc_rate3(x, mean0, mean1, mean2, mean3, lgconf0, lgconf1, lgconf2, lgconf3):
+	m0=torch.clamp(mean0, -1, 1)
+	m1=torch.clamp(mean1, -1, 1)
+	m2=torch.clamp(mean2, -1, 1)
+	m3=torch.clamp(mean3, -1, 1)
+	c0=torch.pow(2, torch.clamp(torch.abs(lgconf0), min=None, max=9))
+	c1=torch.pow(2, torch.clamp(torch.abs(lgconf1), min=None, max=9))
+	c2=torch.pow(2, torch.clamp(torch.abs(lgconf2), min=None, max=9))
+	c3=torch.pow(2, torch.clamp(torch.abs(lgconf3), min=None, max=9))
+	p=(calf_phi3(x+1/256, m0, m1, m2, m3, c0, c1, c2, c3)-calf_phi3(x, m0, m1, m2, m3, c0, c1, c2, c3)+1/(256*4096))/(calf_phi3(1, m0, m1, m2, m3, c0, c1, c2, c3)-calf_phi3(-1, m0, m1, m2, m3, c0, c1, c2, c3)+1/(256*4096)+2/4096)
+	#p=(torch.erf((x+1/256-mean)*conf)-torch.erf((x-mean)*conf)+1/(256*4096))/(torch.erf((1-mean)*conf)-torch.erf((-1-mean)*conf)+2/4096)
+	bitsize=-torch.log2(p)
+	return bitsize
+
+
+#def calc_phi(sym, mean, conf):
+#	x=(sym-mean)*conf
+#	ret=torch.erf(x)
+#	#ret=torch.erf(x)+sym*(1/4096)
+#	#ret=torch.sgn(x)*torch.sqrt(torch.abs(x))#X
+#	return ret
+
+def calc_rate2(x, mean, lgconf):
 	mean=torch.clamp(mean, -1, 1)
-	
-	#dmin=torch.abs(x-mean).detach()*0.4365
-	#dmin=torch.max(torch.abs(x-mean))
-	#dmin=torch.clamp(dmin, min=0.0001, max=None)
-	#sdev=torch.clamp(torch.abs(sdev), min=dmin, max=None)
-	sdev=torch.abs(sdev)+1/256
+	lgconf=torch.clamp(torch.abs(lgconf), min=None, max=9)
+	conf=torch.pow(2, lgconf)
+	p=(torch.erf((x+1/256-mean)*conf)-torch.erf((x-mean)*conf)+1/(256*4096))/(torch.erf((1-mean)*conf)-torch.erf((-1-mean)*conf)+2/4096)
+	#p=(calc_phi(x+1/256, mean, conf)-calc_phi(x, mean, conf)+1/(256*4096))/(calc_phi(1, mean, conf)-calc_phi(-1, mean, conf)+2/4096)
+	bitsize=-torch.log2(p)
+	return bitsize
 
-	m=1/sdev
-	c=-mean*m
 
-	num=torch.erfc(c-m)-torch.erfc(c+m)
-	den=torch.erfc(m*x+c)-torch.erfc(m*(x+1/256)+c)
-	#num=torch.erf(c+m)-torch.erf(c-m)
-	#den=torch.erf(m*(x+(1/256))+c)-torch.erf(m*x+c)
-	#den=torch.clamp(den, min=0.0001, max=None)
-	bitsize=torch.log2(num/den)
+#	mean=torch.clamp(mean, -1, 1)
+#
+#	#conf=torch.clamp(torch.abs(conf), min=None, max=512)
+#	lgconf=torch.clamp(torch.abs(lgconf), min=None, max=9)
+#
+#	#dmin=torch.abs(x-mean).detach()*0.4365
+#	#dmin=torch.max(torch.abs(x-mean))
+#	#dmin=torch.clamp(dmin, min=0.0001, max=None)
+#	#sdev=torch.clamp(torch.abs(sdev), min=dmin, max=None)
+#	#sdev=torch.abs(sdev)+1/256
+#
+#	#m=conf
+#	m=torch.pow(2, lgconf)
+#	#m=1/sdev
+#	c=-mean*m
+#
+#	num=torch.erfc(c-m)-torch.erfc(c+m)
+#	den=torch.erfc(m*x+c)-torch.erfc(m*(x+1/256)+c)
+#	#num=torch.erf(c+m)-torch.erf(c-m)
+#	#den=torch.erf(m*(x+(1/256))+c)-torch.erf(m*x+c)
+#	#den=torch.clamp(den, min=0.0001, max=None)
+#	bitsize=torch.log2(num/den)
 
 	#bitsize=torch.nan_to_num(bitsize, 1000, 1000, 1000)#gradient is zero
 
@@ -781,7 +838,7 @@ def calc_rate2(x, mean, sdev):#Zipf's law: bitsize = -log2(p)		p is truncated no
 	
 	#p=(torch.erf(m*(x+(1/256))+c)-torch.erf(m*x+c))/(torch.erf(c+m)-torch.erf(c-m))
 	#bitsize=-torch.log2(p)
-	return bitsize
+#	return bitsize
 
 def calc_rate(x, mean, lg_conf):#Zipf's law: bitsize = g_rate - log2(f(x))		f(x) = truncated normal distribution
 	offset   = 0.5*(math.log2(math.pi)-1)
@@ -805,36 +862,37 @@ def calc_rate(x, mean, lg_conf):#Zipf's law: bitsize = g_rate - log2(f(x))		f(x)
 
 def calc_loss(x):
 	x=x.to(device)
+	#print('x [%f, %f]'%(torch.min(x).item(), torch.max(x).item()))
 
 	x=color_space_transform(x)
+	#print('T [%f, %f]'%(torch.min(x).item(), torch.max(x).item()))
+
 	t=torch.split(x, 1, dim=1)
 	av    =torch.cat((t[0], t[4], t[ 8]), dim=1)#top-left
 	diffx =torch.cat((t[1], t[5], t[ 9]), dim=1)#top-right
 	diffy =torch.cat((t[2], t[6], t[10]), dim=1)#bottom-left
 	diffxy=torch.cat((t[3], t[7], t[11]), dim=1)#bottom-right
 
-	#av    =torch.cat((x[:, 0, :, :], x[:, 4, :, :], x[:,  8, :, :]), dim=1)
-	#diffx =torch.cat((x[:, 1, :, :], x[:, 5, :, :], x[:,  9, :, :]), dim=1)
-	#diffy =torch.cat((x[:, 2, :, :], x[:, 6, :, :], x[:, 10, :, :]), dim=1)
-	#diffxy=torch.cat((x[:, 3, :, :], x[:, 7, :, :], x[:, 11, :, :]), dim=1)
-
-	#xa, ya, xb, yb, xc, yc=torch.split(x, [1, 3, 1, 3, 1, 3], dim=1)#the average x is already decoded, the other subbands y are the prediction target
-	#x=torch.cat((xa, xb, xc), dim=1)
-	#y=torch.cat((ya, yb, yc), dim=1)
-
+	#mean0, mean1, mean2, mean3, lgconf0, lgconf1, lgconf2, lgconf3=model(av, diffx, diffy, diffxy)
 	mean, lgconf=model(av, diffx, diffy, diffxy)
 	truth=torch.cat((diffx, diffy, diffxy), dim=1)
 
-	#size_mask=calc_rate2(truth, mean, lgconf)
-	mean=torch.clamp(mean, -1, 1)
-	lgconf=torch.clamp(torch.abs(lgconf), min=None, max=8)
-	size_mask=calc_rate(truth, mean, lgconf)
+	#size_mask=calc_rate3(truth, mean0, mean1, mean2, mean3, lgconf0, lgconf1, lgconf2, lgconf3)
 
-	bitsize=torch.sum(size_mask)*(1/(truth.nelement()<<3))
-	ratio=1/bitsize.item()
+	size_mask=calc_rate2(truth, mean, lgconf)
+
+	#mean=torch.clamp(mean, -1, 1)
+	#lgconf=torch.clamp(torch.abs(lgconf), min=None, max=8)
+	#size_mask=calc_rate(truth, mean, lgconf)
+
+	bpp=torch.sum(size_mask)*(1/(truth.nelement()))
+	return bpp, size_mask
+
+	#bitsize=torch.sum(size_mask)*(1/(truth.nelement()<<3))
+	#ratio=1/bitsize.item()
 	#bitsize=torch.sum(size_mask)
 	#ratio=truth.nelement()*g_rate/bitsize.item()
-	return bitsize, ratio, mean, lgconf, av, truth, size_mask
+	#return bitsize, ratio, mean, lgconf, av, truth, size_mask
 
 
 #	x=differentiate_xy(x)
@@ -918,29 +976,23 @@ p0=get_params(model)
 distance_prev=0
 #rmse=0
 bpp=0
-usize=0
-csize=0
 for epoch in range(epochs):
 	it=0
 	progress=0
 	#rmse=0
 	bpp=0
-	usize=0
-	csize=0
 	for x in train_loader:#TRAIN loop
 		if use_cuda:
 			with torch.cuda.amp.autocast(dtype=torch.float16):#https://pytorch.org/docs/master/notes/amp_examples.html
-				L, current_ratio, pred, sdev, av, truth, size_mask=calc_loss(x)		#1 compute the objective function forward
+				L, size_mask=calc_loss(x)		#1 compute the objective function forward
+				#L, current_ratio, pred, sdev, av, truth, size_mask=calc_loss(x)
 		else:
-			L, current_ratio, pred, sdev, av, truth, size_mask=calc_loss(x)
+			L, size_mask=calc_loss(x)
 
+		it+=1
 		if not math.isfinite(L.item()):
-			print('Loss=%f. SKIPPING BATCH %d.'%(L.item(), it+1))
+			print('Loss=%f. SKIPPING BATCH %d.'%(L.item(), it))
 			continue
-			#exit(0)
-
-		usize+=truth.nelement()
-		csize+=L.item()
 
 		model.zero_grad()			#2 cleaning the gradients
 
@@ -960,18 +1012,15 @@ for epoch in range(epochs):
 			optimizer.step()
 
 		progress+=x.shape[0]
-		current_bpp=8/current_ratio
+		current_bpp=L.item()
 		bpp+=current_bpp	# BPP can be averaged, but not CR
 		#rmse+=current_rmse
 		#ratio+=current_ratio
-		it+=1
 
-		print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(progress, train_size, 100*progress/train_size, current_ratio, current_bpp, math.ceil(L.item()*truth.shape[1]*truth.shape[2]*truth.shape[3]), truth.nelement()//x.shape[0]), end='\r')
+		print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(progress, train_size, 100*progress/train_size, 8/current_bpp, current_bpp, math.ceil(L.item()*size_mask.shape[1]*size_mask.shape[2]*size_mask.shape[3]), size_mask.nelement()//x.shape[0]), end='\r')
 		#print('%d/%d = %5.2f%%  RMSE %16.12f BPP %14.12f\t\t'%(progress, train_size, 100*progress/train_size, current_rmse, 8/current_ratio), end='\r')
 	#rmse/=nbatches
 	bpp/=nbatches
-	usize/=nbatches
-	csize/=nbatches
 	ratio=8/bpp
 
 	to_save=not save_records
@@ -999,20 +1048,23 @@ for epoch in range(epochs):
 	distance_delta=distance_current-distance_prev
 	distance_prev=distance_current
 
-	val_bpp=0
-	with torch.no_grad():#validation
-		nval=len(dataset_val)
-		for k in range(nval):
-			x=dataset_val[k]
-			x=x[None, :, :, :]
-			v_L, v_ratio, v_pred, v_sdev, v_av, v_truth, size_mask=calc_loss(x)
-			val_bpp+=8/v_ratio
-			print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(k+1, nval, 100*(k+1)/nval, v_ratio, 8/v_ratio, math.ceil(v_L.item()*truth.shape[1]*truth.shape[2]*truth.shape[3]), v_truth.nelement()//x.shape[0]), end='\r')
-		val_bpp/=nval
+	if dataset_val is None:
+		val_bpp=bpp
+	else:
+		val_bpp=0
+		with torch.no_grad():#validation
+			nval=len(dataset_val)
+			for k in range(nval):
+				x=dataset_val[k]
+				x=x[None, :, :, :]
+				val_L, size_mask=calc_loss(x)
+				val_bpp+=val_L.item()
+				print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(k+1, nval, 100*(k+1)/nval, 8/val_L.item(), val_L.item(), math.ceil(val_L.item()*size_mask.shape[1]*size_mask.shape[2]*size_mask.shape[3]), size_mask.nelement()//x.shape[0]), end='\r')
+			val_bpp/=nval
 
-		#x=dataset_test[21-1]
-		#x=x[None, :, :, :]
-		#v_L, v_ratio, v_pred, v_sdev, v_av, v_truth, size_mask=calc_loss(x)
+			#x=dataset_test[21-1]
+			#x=x[None, :, :, :]
+			#v_L, v_ratio, v_pred, v_sdev, v_av, v_truth, size_mask=calc_loss(x)
 
 	print('Epoch %3d [%10f,%10f]  CR %16.12f BPP %13.9f  val CR %10f  elapsed %10f '%(epoch+1, distance_current, distance_delta, ratio, bpp, 8/val_bpp, (t2-start)/60), end='')
 	#psnr=20*math.log10(255/rmse)
@@ -1082,56 +1134,59 @@ cr_kodak_png=[
 ]
 test_idx=0
 #rmse=0
-usize=0
-csize=0
-#csize0=0
-#csize1=0
+bpp=0
 t_filt=0
 for x in test_loader:#TEST loop
 	with torch.no_grad():
 		t1=time.time()
-		bitsize, current_ratio, mean, conf, av, truth, size_mask=calc_loss(x)
+		current_bpp, size_mask=calc_loss(x)
 		t2=time.time()
 
-		minconf=torch.min(conf).item()
-		maxconf=torch.max(conf).item()
-		conf*=0.125	#[0, 8] -> [0, 1]
+		current_ratio=8/current_bpp.item()
+
+		#minconf=torch.min(conf).item()
+		#maxconf=torch.max(conf).item()
+		#conf*=0.125	#[0, 8] -> [0, 1]
 		vs_jxl=current_ratio/cr_kodak_jxl[test_idx]
 		vs_png=current_ratio/cr_kodak_png[test_idx]
 		#fmt_bytesize=dataset_test.get_size(test_idx)
 		#fmt_ratio=x.nelement()/fmt_bytesize
-		current_bpp=8/current_ratio
-		print('Test %2d  CR %16.12f BPP %13.9f  vs.jxl %8.6f vs.png %8.6f  conf [%f, %f]  elapsed %9f sec'%(test_idx+1, current_ratio, current_bpp, vs_jxl, vs_png, minconf, maxconf, t2-t1))
+		#current_bpp=8/current_ratio
+		print('Test %2d  CR %16.12f BPP %13.9f  vs.jxl %8.6f vs.png %8.6f  elapsed %9f sec'%(test_idx+1, current_ratio, current_bpp, vs_jxl, vs_png, t2-t1))
+		#print('Test %2d  CR %16.12f BPP %13.9f  vs.jxl %8.6f vs.png %8.6f  conf [%f, %f]  elapsed %9f sec'%(test_idx+1, current_ratio, current_bpp, vs_jxl, vs_png, minconf, maxconf, t2-t1))
 		#current_psnr=20*math.log10(255/current_rmse)
 		#print('Test %2d  rmse %16.12f psnr %13.9f  lossy %7d BPP %16.12f  lossless %7d BPP %16.12f  elapsed %9f'%(test_idx+1, current_rmse, current_psnr, current_csize0, current_csize0*8/current_usize, current_csize1, current_csize1*8/current_usize, t2-t1))
 
-		if test_idx+1==21:
-			diffx, diffy, diffxy=torch.split(truth-mean+0.5, 3, dim=1)
-			s1=torch.cat((torch.cat((av, diffx), dim=3), torch.cat((diffy, diffxy), dim=3)), dim=2)#difference between original & prediction
-			size_mask*=1/255
-			#vmin=torch.min(size_mask).item()
-			#vmax=torch.max(size_mask).item()
-			#if vmin<vmax:
-			#	size_mask=(size_mask-vmin)/(vmax-vmin)
-			topright, bottomleft, bottomright=torch.split(size_mask, 3, dim=1)
-			topleft=torch.zeros(topright.shape, dtype=topright.dtype, device=topright.device)
-			s2=torch.cat((torch.cat((topleft, topright), dim=3), torch.cat((bottomleft, bottomright), dim=3)), dim=2)#per-pixel bit-cost
-			sample=torch.cat((s1, s2), dim=3)
-
-			fn='%s-%s-%d'%(modelname, time.strftime('%Y%m%d-%H%M%S'), test_idx+1)
-			save_tensor_as_grid(sample, 1, 'results/'+fn+'-cr%f.PNG'%current_ratio)
+		#if test_idx+1==21:#save preview
+		#	diffx, diffy, diffxy=torch.split(truth-mean+0.5, 3, dim=1)
+		#	s1=torch.cat((torch.cat((av, diffx), dim=3), torch.cat((diffy, diffxy), dim=3)), dim=2)#difference between original & prediction
+		#	size_mask*=1/255
+		#	#vmin=torch.min(size_mask).item()
+		#	#vmax=torch.max(size_mask).item()
+		#	#if vmin<vmax:
+		#	#	size_mask=(size_mask-vmin)/(vmax-vmin)
+		#	topright, bottomleft, bottomright=torch.split(size_mask, 3, dim=1)
+		#	topleft=torch.zeros(topright.shape, dtype=topright.dtype, device=topright.device)
+		#	s2=torch.cat((torch.cat((topleft, topright), dim=3), torch.cat((bottomleft, bottomright), dim=3)), dim=2)#per-pixel bit-cost
+		#	sample=torch.cat((s1, s2), dim=3)
+		#
+		#	fn='%s-%s-%d'%(modelname, time.strftime('%Y%m%d-%H%M%S'), test_idx+1)
+		#	save_tensor_as_grid(sample, 1, 'results/'+fn+'-cr%f.PNG'%current_ratio)
 
 		#if test_idx+1==21:
 		#	sample=torch.cat((truth+0.5, mean+0.5, conf, truth-mean+0.5, size_mask), dim=3)
 		#	fn='%s-%s-%d'%(modelname, time.strftime('%Y%m%d-%H%M%S'), test_idx+1)
 		#	save_tensor_as_grid(sample, 1, 'results/'+fn+'-bpp%f-conf%f.PNG'%(current_bpp, maxconf))
-		usize+=truth.nelement()#current_usize
-		csize+=truth.nelement()/current_ratio#current_csize
+		bpp+=current_bpp.item()
+		#usize+=truth.nelement()#current_usize
+		#csize+=truth.nelement()/current_ratio#current_csize
 		t_filt+=t2-t1
 		test_idx+=1
 
 if test_idx:
-	ratio=usize/csize
+	bpp/=test_idx
+	ratio=8/bpp
+	#ratio=usize/csize
 	print('Average  CR %16.12f BPP %13.9f  vs.jxl %8.6f vs.png %8.6f  filt %f sec'%(ratio, 8/ratio, ratio/2.78408057362, ratio/1.8390925735, t_filt/test_idx))
 	#rmse/=test_idx
 	#print('Average rmse %16.12f psnr %13.9f  size %7d lossy %7d BPP %13.9f  lossless %7d BPP %13.9f  filt %f sec'%(rmse, 20*math.log10(255/rmse), usize/test_idx, csize0/test_idx, csize0*8/usize, csize1/test_idx, csize1*8/usize, t_filt/test_idx))
