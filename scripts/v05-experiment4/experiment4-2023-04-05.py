@@ -102,26 +102,20 @@ from torchsummary import summary
 #C31-dropout2d		 226854		
 #C32-W16D08
 
-#C33-W32D08	X	 140040		 94.598373@CLIC@1	2.633249@98	2.344271@96	2.291659@100		//124416//410916
-#C33-W32D08	X	 140040		 96.726323@CLIC@1	3.657146@175	3.093322@173	3.130962@175	XGZ
-
-#name			params		sec/epoch		peak train CR	peak val CR	peak test CR
-#C34-W32D08-per-row	 117702		 75.766336@CLIC@1	2.522278@113	2.136998@92	2.183298@113
-#C35-W32D08-per-px	 107640		 97.671703@CLIC@1	2.537100@180	2.450299@146	2.199998@180			//2.119924@24 kodim21
-
-#C35-W32D08-per-px-erf	 107640
+#C33-W32D08		 140040		 94.598373@CLIC@1	2.633249@98	2.344271@96	2.291659@100		//124416//410916
+#C33-W32D08		 140040		 96.726323@CLIC@1	3.657146@175	3.093322@173	3.130962@175	XGZ
 
 
 
 
 ## config ##
-import codec35 as currentcodec
-modelname='C35'
-pretrained=0	# assign pretrained=0 when training first time
+import codec33 as currentcodec
+modelname='C33'
+pretrained=1	# assign pretrained=0 when training first time
 save_records=0
 
-epochs=10
-lr=0.001		#always start with high learning rate 0.001
+epochs=25
+lr=0.00005		#always start with high learning rate 0.001
 batch_size=1		# <=24, increase batch size instead of decreasing learning rate
 train_block=0		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_block was changed
@@ -131,26 +125,22 @@ clip_grad=1		# enable if got nan
 use_SGD=0		# enable if got nan
 model_summary=0
 plot_grad=0		# 0 disabled   1 plot grad   2 plot log10 grad
-weight_decay=0.004	# increase if overfit
+weight_decay=0.001	# increase if overfit
 use_dropout=0
 
 g_rate=8
 #g_rate_factor=0.001
 
+#path_train='E:/ML/dataset-CLIC30'	#30 samples
 #path_train='E:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 #path_train='E:/ML/datasets-train/dataset-caltech256'
 path_train='E:/ML/dataset-CLIC'
 #path_train='E:/ML/dataset-AWM'
 #path_train='E:/ML/dataset-CLIC-small'
 #path_train='E:/ML/dataset-AWM-small'
-#path_train='E:/ML/dataset-CLIC30'	#30 samples
-
-path_val='E:/ML/dataset-CLIC30'
 
 path_test='E:/ML/dataset-kodak'
 #path_test='E:/ML/dataset-CLIC30'
-
-justexportweights=0
 
 
 
@@ -463,47 +453,6 @@ def save_tensor_as_grid(x, nrows, name):
 	image=Image.fromarray(grid)
 	image.save(name, format='PNG')
 
-def exportweights(filename, model):
-	maxdim=0
-	with open(filename, 'w') as file:
-		for name, param in model.named_parameters():
-			file.write(name)
-			dim=param.dim()
-			if maxdim<dim:
-				maxdim=dim
-			for size in param.shape:
-				file.write('\t%d'%size)
-			file.write(':\n')
-			if dim==4:
-				for filt in param:
-					for kernel in filt:
-						for row in kernel:
-							for val in row:
-								file.write('\t'+str(val.item()))
-							file.write('\n')
-						file.write('\n')
-					file.write('\n')
-				file.write('\n')
-			elif dim==3:
-				for matrix in param:
-					for row in matrix:
-						for val in row:
-							file.write('\t'+str(val.item()))
-						file.write('\n')
-					file.write('\n')
-				file.write('\n')
-			elif dim==2:
-				for row in param:
-					for val in row:
-						file.write('\t'+str(val.item()))
-					file.write('\n')
-				file.write('\n')
-			elif dim==1:
-				for val in param:
-					file.write('\t'+str(val.item()))
-				file.write('\n')
-	return maxdim
-
 
 def plot_grad_flow(model):#https://discuss.pytorch.org/t/check-gradient-flow-in-network/15063/6
 	avgrad=0
@@ -529,7 +478,7 @@ def plot_grad_flow(model):#https://discuss.pytorch.org/t/check-gradient-flow-in-
 	plt.clf()
 	plt.plot(av_grads, alpha=0.3, color='b')
 	plt.hlines(0, 0, len(av_grads)+1, linewidth=1, color='k' )
-	plt.xticks(range(0, len(av_grads), 1), layers, rotation='vertical')
+	plt.xticks(range(0,len(av_grads), 1), layers, rotation='vertical')
 	plt.xlim(xmin=0, xmax=len(av_grads))
 	plt.xlabel('Layers')
 	plt.ylabel('Av. gradient')
@@ -551,29 +500,6 @@ def get_params(model):#https://discuss.pytorch.org/t/plot-magnitude-of-gradient-
 			else:
 				params=torch.cat((params, temp))
 	return params
-
-
-model=CompressorModel()
-if pretrained:
-	load_model(model, modelname+'.pth.tar')
-if use_cuda:
-	model=model.cuda()
-#if torch.__version__ >= version.parse('2.0.0'):#doesn't work on Windows yet
-#	model=torch.compile(model, mode='reduce-overhead')
-
-if justexportweights:
-	filename=modelname+'-'+time.strftime('%Y%m%d-%H%M%S')+'.txt'
-	print('Exporting weights as '+filename)
-	maxdim=exportweights(filename, model)
-	print('Maxdim: %d'%maxdim)
-	print('Done.')
-	exit(0)
-
-if model_summary:
-	print(model)
-	summary(model, (3, 64, 64))#
-learned_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print('%s has %d parameters'%(modelname, learned_params))
 
 
 #dataset average dimensions:
@@ -601,8 +527,6 @@ dataset_train=GenericDataLoader(path_train, False)
 ##elif use_dataset=='imagenet':
 ##	dataset_train=torchvision.datasets.ImageNet('E:/ML/dataset-imagenet')
 
-dataset_val=GenericDataLoader(path_val, True)
-
 dataset_test=GenericDataLoader(path_test, True)
 #dataset_test=GenericDataLoader('E:/ML/dataset-kodak-small', True)
 
@@ -610,6 +534,20 @@ train_size=dataset_train.__len__()
 test_size=dataset_test.__len__()
 train_loader=DataLoader(dataset_train, batch_size=batch_size, shuffle=True)#try num_workers=16
 test_loader=DataLoader(dataset_test, batch_size=1)#different resolutions at 1:1 can't be stacked
+
+model=CompressorModel()
+if pretrained:
+	load_model(model, modelname+'.pth.tar')
+if use_cuda:
+	model=model.cuda()
+#if torch.__version__ >= version.parse('2.0.0'):#doesn't work on Windows yet
+#	model=torch.compile(model, mode='reduce-overhead')
+
+if model_summary:
+	print(model)
+	summary(model, (3, 64, 64))#
+learned_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print('%s has %d parameters'%(modelname, learned_params))
 
 if use_SGD:
 	optimizer=optim.SGD(params=model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -744,45 +682,6 @@ def calc_pairwiseentropy_differentiable(x):#for binary masks only
 	#x*=two_over_256sqrtpi	#multiply f(x) by rectangle width = 1/256
 	#return x
 
-#def calc_rate3(x, mean, sdev):
-#	mean=torch.clamp(mean, -1, 1)
-#	sdev=torch.clamp(torch.abs(sdev), min=1e-3, max=None)
-#	loss=(x-mean)/sdev
-#	
-#	return loss, bitsize
-
-def calc_rate2(x, mean, sdev):#Zipf's law: bitsize = -log2(p)		p is truncated normal distribution
-	mean=torch.clamp(mean, -1, 1)
-	
-	#dmin=torch.abs(x-mean).detach()*0.4365
-	#dmin=torch.max(torch.abs(x-mean))
-	#dmin=torch.clamp(dmin, min=0.0001, max=None)
-	#sdev=torch.clamp(torch.abs(sdev), min=dmin, max=None)
-	sdev=torch.abs(sdev)+1/256
-
-	m=1/sdev
-	c=-mean*m
-
-	num=torch.erfc(c-m)-torch.erfc(c+m)
-	den=torch.erfc(m*x+c)-torch.erfc(m*(x+1/256)+c)
-	#num=torch.erf(c+m)-torch.erf(c-m)
-	#den=torch.erf(m*(x+(1/256))+c)-torch.erf(m*x+c)
-	#den=torch.clamp(den, min=0.0001, max=None)
-	bitsize=torch.log2(num/den)
-
-	#bitsize=torch.nan_to_num(bitsize, 1000, 1000, 1000)#gradient is zero
-
-	#num_finite=torch.sum(torch.isfinite(bitsize)).item()
-	#if num_finite!=bitsize.nelement():
-	#	print('\nnum_finite %d, nelement %d'%(num_finite, bitsize.nelement()))
-	#	assert(0)
-
-	#bitsize=torch.log2(torch.erf(c+m)-torch.erf(c-m))-torch.log2(torch.erf(m*(x+(1/256))+c)-torch.erf(m*x+c))
-	
-	#p=(torch.erf(m*(x+(1/256))+c)-torch.erf(m*x+c))/(torch.erf(c+m)-torch.erf(c-m))
-	#bitsize=-torch.log2(p)
-	return bitsize
-
 def calc_rate(x, mean, lg_conf):#Zipf's law: bitsize = g_rate - log2(f(x))		f(x) = truncated normal distribution
 	offset   = 0.5*(math.log2(math.pi)-1)
 	gain     = 0.5/math.log(2)
@@ -823,17 +722,13 @@ def calc_loss(x):
 	#y=torch.cat((ya, yb, yc), dim=1)
 
 	mean, lgconf=model(av, diffx, diffy, diffxy)
-	truth=torch.cat((diffx, diffy, diffxy), dim=1)
-
-	#size_mask=calc_rate2(truth, mean, lgconf)
 	mean=torch.clamp(mean, -1, 1)
 	lgconf=torch.clamp(torch.abs(lgconf), min=None, max=8)
-	size_mask=calc_rate(truth, mean, lgconf)
+	truth=torch.cat((diffx, diffy, diffxy), dim=1)
 
-	bitsize=torch.sum(size_mask)*(1/(truth.nelement()<<3))
-	ratio=1/bitsize.item()
-	#bitsize=torch.sum(size_mask)
-	#ratio=truth.nelement()*g_rate/bitsize.item()
+	size_mask=calc_rate(truth, mean, lgconf)
+	bitsize=torch.sum(size_mask)
+	ratio=truth.nelement()*g_rate/bitsize.item()
 	return bitsize, ratio, mean, lgconf, av, truth, size_mask
 
 
@@ -921,7 +816,6 @@ bpp=0
 usize=0
 csize=0
 for epoch in range(epochs):
-	it=0
 	progress=0
 	#rmse=0
 	bpp=0
@@ -935,7 +829,7 @@ for epoch in range(epochs):
 			L, current_ratio, pred, sdev, av, truth, size_mask=calc_loss(x)
 
 		if not math.isfinite(L.item()):
-			print('Loss=%f. SKIPPING BATCH %d.'%(L.item(), it+1))
+			print('Loss=%f. SKIPPING BATCH.'%L.item())
 			continue
 			#exit(0)
 
@@ -964,9 +858,8 @@ for epoch in range(epochs):
 		bpp+=current_bpp	# BPP can be averaged, but not CR
 		#rmse+=current_rmse
 		#ratio+=current_ratio
-		it+=1
 
-		print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(progress, train_size, 100*progress/train_size, current_ratio, current_bpp, math.ceil(L.item()*truth.shape[1]*truth.shape[2]*truth.shape[3]), truth.nelement()//x.shape[0]), end='\r')
+		print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(progress, train_size, 100*progress/train_size, current_ratio, current_bpp, math.ceil(L.item()/(8*x.shape[0])), truth.nelement()//x.shape[0]), end='\r')
 		#print('%d/%d = %5.2f%%  RMSE %16.12f BPP %14.12f\t\t'%(progress, train_size, 100*progress/train_size, current_rmse, 8/current_ratio), end='\r')
 	#rmse/=nbatches
 	bpp/=nbatches
@@ -999,22 +892,12 @@ for epoch in range(epochs):
 	distance_delta=distance_current-distance_prev
 	distance_prev=distance_current
 
-	val_bpp=0
 	with torch.no_grad():#validation
-		nval=len(dataset_val)
-		for k in range(nval):
-			x=dataset_val[k]
-			x=x[None, :, :, :]
-			v_L, v_ratio, v_pred, v_sdev, v_av, v_truth, size_mask=calc_loss(x)
-			val_bpp+=8/v_ratio
-			print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(k+1, nval, 100*(k+1)/nval, v_ratio, 8/v_ratio, math.ceil(v_L.item()*truth.shape[1]*truth.shape[2]*truth.shape[3]), v_truth.nelement()//x.shape[0]), end='\r')
-		val_bpp/=nval
+		x=dataset_test[21-1]
+		x=x[None, :, :, :]
+		v_L, v_ratio, v_pred, v_sdev, v_av, v_truth, size_mask=calc_loss(x)
 
-		#x=dataset_test[21-1]
-		#x=x[None, :, :, :]
-		#v_L, v_ratio, v_pred, v_sdev, v_av, v_truth, size_mask=calc_loss(x)
-
-	print('Epoch %3d [%10f,%10f]  CR %16.12f BPP %13.9f  val CR %10f  elapsed %10f '%(epoch+1, distance_current, distance_delta, ratio, bpp, 8/val_bpp, (t2-start)/60), end='')
+	print('Epoch %3d [%10f,%10f]  CR %16.12f BPP %13.9f  val CR %10f  elapsed %10f '%(epoch+1, distance_current, distance_delta, ratio, bpp, v_ratio, (t2-start)/60), end='')
 	#psnr=20*math.log10(255/rmse)
 	#print('Epoch %3d [%10f,%10f]  RMSE %16.12f PSNR %13.9f BPP %12.9f  elapsed %10f '%(epoch+1, distance_current, distance_delta, rmse, psnr, 8/ratio, (t2-start)/60), end='')
 	print(str(timedelta(seconds=t2-start))+record)
