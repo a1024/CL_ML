@@ -110,10 +110,11 @@ from torchsummary import summary
 #		range bug fixed
 #C35-W32D08-per-px-erf	 107640		105.390820@CLIC@1	3.156985@54	3.070384@54	2.885509@50
 #		range bug fix 2
+#C35-W32D08-per-px-erf	 107640		108.658572@CLIC@1	1.724101#75	1.692290@75	1.618866@75
+#		Exp5
 
 #name			params		sec/epoch		peak train CR	peak val CR	peak test CR
-#C35-W32D08-per-px-erf	 107640		108.658572@CLIC@1	1.724101#75	1.692290@75	1.618866@75
-#C37-W32D08-perpx-plain	  30000		114.883141@CLIC@1	3.155952@75	2.994918@74	2.879331@75
+#C37-W32D08-perpx-plain	  30000		114.883141@CLIC@1	3.391071@125	3.145767@125	2.879331@75
 
 
 
