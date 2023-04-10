@@ -107,10 +107,13 @@ from torchsummary import summary
 
 #name			params		sec/epoch		peak train CR	peak val CR	peak test CR
 #C34-W32D08-per-row	 117702		 75.766336@CLIC@1	2.522278@113	2.136998@92	2.183298@113
+#		CLIC30 validation dataset
 #C35-W32D08-per-px	 107640		 97.671703@CLIC@1	2.537100@180	2.450299@146	2.199998@180			//2.119924@24 kodim21
+#C36-W64D08-multi-Gauss
+#		range bug fixed
 
-#C35-W32D08-per-px-erf	 107640
-#C36-W64D08	multiple Gaussians
+#name			params		sec/epoch		peak train CR	peak val CR	peak test CR
+#C35-W32D08-per-px-erf	 107640		105.39082@CLIC@1	3.156985@54	3.070384@54	2.885509@50
 
 
 
@@ -118,11 +121,11 @@ from torchsummary import summary
 ## config ##
 import codec35 as currentcodec
 modelname='C35'
-pretrained=0	# assign pretrained=0 when training first time
+pretrained=1	# assign pretrained=0 when training first time
 save_records=0
 
-epochs=50
-lr=0.001		#always start with high learning rate 0.001
+epochs=25
+lr=0.0001		#always start with high learning rate 0.001
 batch_size=1		# <=24, increase batch size instead of decreasing learning rate
 train_block=0		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_block was changed
@@ -1017,36 +1020,11 @@ for epoch in range(epochs):
 		#rmse+=current_rmse
 		#ratio+=current_ratio
 
-		print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(progress, train_size, 100*progress/train_size, 8/current_bpp, current_bpp, math.ceil(L.item()*size_mask.shape[1]*size_mask.shape[2]*size_mask.shape[3]), size_mask.nelement()//x.shape[0]), end='\r')
+		print('%5d/%5d = %5.2f%%  CR %16.12f BPP %15.12f size %10d /%10d'%(progress, train_size, 100*progress/train_size, 8/current_bpp, current_bpp, math.ceil(L.item()*size_mask.shape[1]*size_mask.shape[2]*size_mask.shape[3]/8), size_mask.nelement()//x.shape[0]), end='\r')
 		#print('%d/%d = %5.2f%%  RMSE %16.12f BPP %14.12f\t\t'%(progress, train_size, 100*progress/train_size, current_rmse, 8/current_ratio), end='\r')
 	#rmse/=nbatches
 	bpp/=nbatches
 	ratio=8/bpp
-
-	to_save=not save_records
-	record=''
-	if min_loss<0 or min_loss>bpp:
-		to_save=1
-		if min_loss>bpp:
-			record=' %10f%%'%(100.*(bpp-min_loss)/min_loss)
-		min_loss=bpp
-	if to_save:
-		torch.save(model.state_dict(), modelname+'.pth.tar')
-
-	if epoch==0:
-		global_free, total=torch.cuda.mem_get_info(device)
-		record+=' GPU %f/%f MB'%((total-global_free)/(1024*1024), total/(1024*1024))
-
-	if plot_grad:
-		plot_grad_flow(model)
-
-	t2=time.time()
-	print('\t\t\t\t', end='\r')
-
-	pk=get_params(model)
-	distance_current=torch.norm(pk-p0).item()
-	distance_delta=distance_current-distance_prev
-	distance_prev=distance_current
 
 	if dataset_val is None:
 		val_bpp=bpp
@@ -1065,6 +1043,31 @@ for epoch in range(epochs):
 			#x=dataset_test[21-1]
 			#x=x[None, :, :, :]
 			#v_L, v_ratio, v_pred, v_sdev, v_av, v_truth, size_mask=calc_loss(x)
+
+	to_save=not save_records
+	record=''
+	if min_loss<0 or min_loss>val_bpp:
+		to_save=1
+		if min_loss>val_bpp:
+			record=' %10f%%'%(100.*(val_bpp-min_loss)/min_loss)
+		min_loss=val_bpp
+	if to_save:
+		torch.save(model.state_dict(), modelname+'.pth.tar')
+
+	if epoch==0:
+		global_free, total=torch.cuda.mem_get_info(device)
+		record+=' GPU %f/%f MB'%((total-global_free)/(1024*1024), total/(1024*1024))
+
+	if plot_grad:
+		plot_grad_flow(model)
+
+	t2=time.time()
+	print('\t\t\t\t', end='\r')
+
+	pk=get_params(model)
+	distance_current=torch.norm(pk-p0).item()
+	distance_delta=distance_current-distance_prev
+	distance_prev=distance_current
 
 	print('Epoch %3d [%10f,%10f]  CR %16.12f BPP %13.9f  val CR %10f  elapsed %10f '%(epoch+1, distance_current, distance_delta, ratio, bpp, 8/val_bpp, (t2-start)/60), end='')
 	#psnr=20*math.log10(255/rmse)
@@ -1157,21 +1160,22 @@ for x in test_loader:#TEST loop
 		#current_psnr=20*math.log10(255/current_rmse)
 		#print('Test %2d  rmse %16.12f psnr %13.9f  lossy %7d BPP %16.12f  lossless %7d BPP %16.12f  elapsed %9f'%(test_idx+1, current_rmse, current_psnr, current_csize0, current_csize0*8/current_usize, current_csize1, current_csize1*8/current_usize, t2-t1))
 
-		#if test_idx+1==21:#save preview
-		#	diffx, diffy, diffxy=torch.split(truth-mean+0.5, 3, dim=1)
-		#	s1=torch.cat((torch.cat((av, diffx), dim=3), torch.cat((diffy, diffxy), dim=3)), dim=2)#difference between original & prediction
-		#	size_mask*=1/255
-		#	#vmin=torch.min(size_mask).item()
-		#	#vmax=torch.max(size_mask).item()
-		#	#if vmin<vmax:
-		#	#	size_mask=(size_mask-vmin)/(vmax-vmin)
-		#	topright, bottomleft, bottomright=torch.split(size_mask, 3, dim=1)
-		#	topleft=torch.zeros(topright.shape, dtype=topright.dtype, device=topright.device)
-		#	s2=torch.cat((torch.cat((topleft, topright), dim=3), torch.cat((bottomleft, bottomright), dim=3)), dim=2)#per-pixel bit-cost
-		#	sample=torch.cat((s1, s2), dim=3)
-		#
-		#	fn='%s-%s-%d'%(modelname, time.strftime('%Y%m%d-%H%M%S'), test_idx+1)
-		#	save_tensor_as_grid(sample, 1, 'results/'+fn+'-cr%f.PNG'%current_ratio)
+		if test_idx+1==21:#save preview
+			#diffx, diffy, diffxy=torch.split(truth-mean+0.5, 3, dim=1)
+			#s1=torch.cat((torch.cat((av, diffx), dim=3), torch.cat((diffy, diffxy), dim=3)), dim=2)#difference between original & prediction
+			size_mask*=10/255
+			#vmin=torch.min(size_mask).item()
+			#vmax=torch.max(size_mask).item()
+			#if vmin<vmax:
+			#	size_mask=(size_mask-vmin)/(vmax-vmin)
+			topright, bottomleft, bottomright=torch.split(size_mask, 3, dim=1)
+			topleft=torch.zeros(topright.shape, dtype=topright.dtype, device=topright.device)
+			s2=torch.cat((torch.cat((topleft, topright), dim=3), torch.cat((bottomleft, bottomright), dim=3)), dim=2)#per-pixel bit-cost
+			sample=s2
+			#sample=torch.cat((s1, s2), dim=3)
+		
+			fn='%s-%s-%d'%(modelname, time.strftime('%Y%m%d-%H%M%S'), test_idx+1)
+			save_tensor_as_grid(sample, 1, 'results/'+fn+'-cr%f.PNG'%current_ratio)
 
 		#if test_idx+1==21:
 		#	sample=torch.cat((truth+0.5, mean+0.5, conf, truth-mean+0.5, size_mask), dim=3)
