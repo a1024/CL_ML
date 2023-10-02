@@ -16,8 +16,9 @@ import time
 from datetime import timedelta
 import matplotlib
 import matplotlib.pyplot as plt
-#from torchsummary import summary
+from torchsummary import summary
 #import nullcontext
+
 
 
 
@@ -27,16 +28,16 @@ modelname='C02'
 pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=100
-lr=0.00001*0.75**1	#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
-lr=0.0001
-batch_size=30		# <=24, increase batch size instead of decreasing learning rate
+epochs=10
+lr=0.00001*0.75**4	#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+#lr=0.0001
+batch_size=128		# <=24, increase batch size instead of decreasing learning rate
 train_crop=128		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
 detect_anomalies=0	#enable for debugging CRASHES
-laptop=1
+initial_test=1
 
 clip_grad=1		# enable if got nan
 use_SGD=0		# enable if got nan or overfit
@@ -46,6 +47,7 @@ weight_decay=0#.0035	# increase if overfit
 
 justexportweights=0
 
+laptop=0
 if laptop:
 	path_train='C:/Projects/datasets/dataset-CLIC30'
 	path_val=None
@@ -423,7 +425,7 @@ if justexportweights:
 
 if model_summary:
 	print(model)
-	#summary(model, (3, 64, 64))#
+	summary(model, (3, 64, 64))#
 learned_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print('%s has %d parameters'%(modelname, learned_params))
 
@@ -495,6 +497,20 @@ nbatches=(train_size+batch_size-1)//batch_size
 #inv_nbatches=batch_size//train_size#X
 p0=get_params(model)
 distance_prev=0
+
+
+if dataset_val is not None:#initial validation
+	model.epoch_start()
+	with torch.no_grad():
+		nval=len(dataset_val)
+		for k in range(nval):	#validation EPOCH loop
+			x, fname=dataset_val[k]
+			x=x[None, :, :, :]
+			loss, msg=calc_loss(x)
+
+			print('%6d/%6d =%6.2f%%  %s'%(k+1, nval, 100*(k+1)/nval, msg), end='\r')
+		val_loss, val_msg=model.epoch_end()
+	print('E%4d [%10f,%10f]  V %s  elapsed %10f '%(0, 0, 0, val_msg, 0))
 
 for epoch in range(epochs):		#TRAIN loop
 	it=0
@@ -704,8 +720,8 @@ for x, fname in test_loader:		#TEST loop
 		test_idx+=1
 if test_idx:
 	loss, msg=model.epoch_end()
-	print('Total  CR%s  Elapsed %f sec'%(msg, t_filt))
-model.finish_msg()
+	print('Total  %s  Elapsed %f sec'%(msg, t_filt))
+model.checkpoint_msg()
 print('Finished on '+time.strftime('%Y-%m-%d %H:%M:%S'))
 
 

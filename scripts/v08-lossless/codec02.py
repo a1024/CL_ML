@@ -61,6 +61,11 @@ class Codec(nn.Module):
 		else:
 			loss=0
 		return loss, '%14f'%(255*loss)
-	def finish_msg(self):
-		for param in self.param:
-			print('%21f'%param.item())
+	def checkpoint_msg(self):
+		for idx in range(len(self.param)):
+			if idx&1:
+				end='\n'
+			else:
+				end='    '
+			print('%21.17f%s'%(self.param[idx].item(), end), end='')
+

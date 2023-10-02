@@ -183,5 +183,5 @@ class Codec(nn.Module):				#L3C-Pytorch
 		self.csize=0
 	def epoch_end(self):
 		return self.csize/self.usize, '%14f'%(self.usize/self.csize)#invCR
-	def finish_msg(self):
+	def checkpoint_msg(self):
 		pass
