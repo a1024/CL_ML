@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-import math
+#import math
 
 #Conv2d:		Dout = floor((Din + 2*padding - dilation*(kernel-1) - 1)/stride + 1)
 #ConvTranspose2d:	Dout = (Din-1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1
@@ -15,6 +15,22 @@ def pred_clampedgrad(x):
 	pred=torch.clamp(pred, vmin, vmax)
 	x=x-pred
 	return x
+
+def calc_entropy_differentiable(x, nbits):
+	nlevels=1<<nbits
+	x=(x+1)*((nlevels-1)/2)		#[-1, 1] -> [0, nlevels-1]
+	entropy=torch.zeros([x.shape[0], x.shape[1]], device=x.device)
+	den=1/(x.shape[2]*x.shape[3])
+	for sym in range(nlevels):#https://github.com/hyk1996/pytorch-differentiable-histogram/blob/master/differentiable_histogram.py
+		prob=torch.relu(1-(x-sym).abs())#https://stackoverflow.com/questions/59850816/how-to-implement-tent-activation-function-in-pytorch
+		prob=torch.sum(prob, dim=[2, 3])
+		prob*=den
+		term=-prob*torch.log2(prob)
+		term=torch.nan_to_num(term, nan=0, posinf=0, neginf=0)
+		entropy+=term
+	entropy=torch.mean(entropy)
+	entropy*=1/nbits
+	return entropy
 
 class Codec(nn.Module):
 	def __init__(self):
@@ -46,21 +62,22 @@ class Codec(nn.Module):
 		x=pred_clampedgrad(x)
 		#x=torch.fmod(x+1, 2)-1#[-1, 1]
 
-		loss=torch.mean(torch.square(x))
+		loss=calc_entropy_differentiable(x, 8)
+		#loss=torch.mean(torch.square(x))
 
 		self.sum+=loss.item()
 		self.count+=1
-		return loss, '%14f'%(255*math.sqrt(loss.item()))
+		return loss, '%14f'%(1/loss.item())
 
 	def epoch_start(self):
 		self.sum=0
 		self.count=0
 	def epoch_end(self):
 		if self.count:
-			loss=math.sqrt(self.sum/self.count)
+			loss=self.sum/self.count
 		else:
 			loss=0
-		return loss, '%14f'%(255*loss)
+		return loss, '%14f'%(1/loss)
 	def checkpoint_msg(self):
 		for idx in range(len(self.param)):
 			if idx&1:

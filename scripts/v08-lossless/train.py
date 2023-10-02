@@ -14,7 +14,7 @@ import torchvision
 import json
 import time
 from datetime import timedelta
-import matplotlib
+#import matplotlib
 import matplotlib.pyplot as plt
 from torchsummary import summary
 #import nullcontext
@@ -25,13 +25,12 @@ from torchsummary import summary
 ## config ##
 from codec02 import Codec
 modelname='C02'
-pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
 epochs=10
-lr=0.00001*0.75**4	#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
-#lr=0.0001
-batch_size=128		# <=24, increase batch size instead of decreasing learning rate
+lr=0.00001*0.75**1	#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+batch_size=16		# <=24, increase batch size instead of decreasing learning rate
 train_crop=128		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
