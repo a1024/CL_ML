@@ -16,7 +16,7 @@ import time
 from datetime import timedelta
 import matplotlib
 import matplotlib.pyplot as plt
-from torchsummary import summary
+#from torchsummary import summary
 #import nullcontext
 
 
@@ -24,10 +24,10 @@ from torchsummary import summary
 ## config ##
 from codec02 import Codec
 modelname='C02'
-pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=1
+epochs=100
 lr=0.00001*0.75**1	#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 lr=0.0001
 batch_size=30		# <=24, increase batch size instead of decreasing learning rate
@@ -36,6 +36,7 @@ cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
 detect_anomalies=0	#enable for debugging CRASHES
+laptop=1
 
 clip_grad=1		# enable if got nan
 use_SGD=0		# enable if got nan or overfit
@@ -43,29 +44,30 @@ model_summary=0
 plot_grad=0		# FOCUS-STEALING POP-UP		0 disabled   1 plot grad   2 plot log10 grad
 weight_decay=0#.0035	# increase if overfit
 
-#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
-#path_train='D:/ML/datasets-train/dataset-caltech256'
-path_train='D:/ML/dataset-openimages/images'
-#path_train='D:/ML/dataset-CLIC'		# best at 1:1
-#path_train='D:/ML/dataset-AWM'
-#path_train='D:/ML/dataset-CLIC-small'
-#path_train='D:/ML/dataset-AWM-small'
-#path_train='D:/ML/dataset-CLIC30'	#30 samples
-#path_train='D:/ML/dataset-natural'
-#path_train='D:/ML/dataset-kodak'	#CHEAT
-
-#path_val=None
-path_val='D:/ML/dataset-CLIC30'
-#path_val='D:/ML/dataset-AWM-small'
-
-path_test='D:/ML/dataset-kodak'
-#path_test='D:/ML/dataset-CLIC30'
-
 justexportweights=0
 
-#div_guard=1e-4
+if laptop:
+	path_train='C:/Projects/datasets/dataset-CLIC30'
+	path_val=None
+	path_test='C:/Projects/datasets/dataset-kodak'
+else:
+	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
+	#path_train='D:/ML/datasets-train/dataset-caltech256'
+	path_train='D:/ML/dataset-openimages/images'
+	#path_train='D:/ML/dataset-CLIC'		# best at 1:1
+	#path_train='D:/ML/dataset-AWM'
+	#path_train='D:/ML/dataset-CLIC-small'
+	#path_train='D:/ML/dataset-AWM-small'
+	#path_train='D:/ML/dataset-CLIC30'	#30 samples
+	#path_train='D:/ML/dataset-natural'
+	#path_train='D:/ML/dataset-kodak'	#CHEAT
 
-reach=5
+	#path_val=None
+	path_val='D:/ML/dataset-CLIC30'
+	#path_val='D:/ML/dataset-AWM-small'
+
+	path_test='D:/ML/dataset-kodak'
+	#path_test='D:/ML/dataset-CLIC30'
 
 
 
@@ -421,7 +423,7 @@ if justexportweights:
 
 if model_summary:
 	print(model)
-	summary(model, (3, 64, 64))#
+	#summary(model, (3, 64, 64))#
 learned_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print('%s has %d parameters'%(modelname, learned_params))
 
@@ -573,7 +575,7 @@ for epoch in range(epochs):		#TRAIN loop
 	if to_save:
 		torch.save(model.state_dict(), modelname+'.pth.tar')
 
-	if epoch==0:
+	if use_cuda and epoch==0:
 		global_free, total=torch.cuda.mem_get_info(device)
 		record+=' GPU %f/%f MB'%((total-global_free)/(1024*1024), total/(1024*1024))
 

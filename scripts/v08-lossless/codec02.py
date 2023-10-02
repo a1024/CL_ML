@@ -23,12 +23,12 @@ class Codec(nn.Module):
 		self.count=0
 
 		self.param=nn.ParameterList([	#YCoCb-R
-			-1,    0,
-			 0.5,  0,
-			 0,   -1,
-			 0,    0,
-			 0,    0.5,
-			 0,    0,
+			nn.Parameter(torch.tensor([-1. ])), nn.Parameter(torch.tensor([ 0. ])),
+			nn.Parameter(torch.tensor([ 0.5])), nn.Parameter(torch.tensor([ 0. ])),
+			nn.Parameter(torch.tensor([ 0. ])), nn.Parameter(torch.tensor([-1. ])),
+			nn.Parameter(torch.tensor([ 0. ])), nn.Parameter(torch.tensor([ 0. ])),
+			nn.Parameter(torch.tensor([ 0. ])), nn.Parameter(torch.tensor([ 0.5])),
+			nn.Parameter(torch.tensor([ 0. ])), nn.Parameter(torch.tensor([ 0. ]))
 		])
 		#self.param=nn.ParameterList([nn.Parameter(torch.randn(1)) for _ in range(12)])
 		#self.p01=nn.Parameter(torch.rand(1, device=device))
