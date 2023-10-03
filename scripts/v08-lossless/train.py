@@ -23,9 +23,9 @@ from torchsummary import summary
 
 
 ## config ##
-from codec02 import Codec
-modelname='C02'
-pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+from codec01 import Codec
+modelname='C01'
+pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
 epochs=10
@@ -48,8 +48,8 @@ justexportweights=0
 
 laptop=0
 if laptop:
-	path_train='C:/Projects/datasets/dataset-CLIC30'
-	path_val=None
+	path_train='C:/Projects/datasets/dataset-CLIC'
+	path_val='C:/Projects/datasets/dataset-CLIC30'
 	path_test='C:/Projects/datasets/dataset-kodak'
 else:
 	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
@@ -210,9 +210,9 @@ def color_transform_YCoCb(x):#YCoCg-R with g & b swapped
 	r, g, b=torch.split(x, 1, dim=1)
 
 	r-=g
-	g+=(r*0.5).int().float()
+	g+=r*0.5
 	b-=g
-	g+=(b*0.5).int().float()
+	g+=b*0.5
 
 	x=torch.cat((r, g, b), dim=1)#{Co, Y, Cb}
 	return x
@@ -222,9 +222,9 @@ def color_transform_YCoCg(x):#YCoCg-R
 	r, g, b=torch.split(x, 1, dim=1)
 
 	r-=b
-	b+=(r*0.5).int().float()
+	b+=r*0.5
 	g-=b
-	b+=(g*0.5).int().float()
+	b+=g*0.5
 	x=torch.cat((r, g, b), dim=1)#{Co, Y, Cg}
 
 	#print('YCoCg [%f, %f] [%f, %f] [%f, %f]'%(y.min(), y.max(), co.min(), co.max(), cg.min(), cg.max()))
