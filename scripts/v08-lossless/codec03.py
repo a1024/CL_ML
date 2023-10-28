@@ -15,8 +15,15 @@ def calc_RMSE(x):
 	return 255*torch.sqrt(torch.mean(torch.square(x)))
 
 def calc_invCR(x):
-	prob=torch.histc(x, 256, -1, 1)/x.nelement()
-	return torch.sum(-prob*torch.nan_to_num(torch.log2(prob), 0, 0, 0)).item()/8
+	entropy=0
+	b, c, h, w=x.shape
+	nch=b*c
+	res=h*w
+	for kb in range(b):
+		for kc in range(c):
+			prob=torch.histc(x[kb, kc, :, :], 256, -1, 1)/res
+			entropy+=torch.sum(-prob*torch.nan_to_num(torch.log2(prob), 0, 0, 0)).item()
+	return entropy/(8*nch)
 
 def safe_inv(x):
 	if x!=0:

@@ -28,8 +28,8 @@ modelname='C03'
 pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=74
-lr=0.00001		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+epochs=50
+lr=0.00002		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
 batch_size=128		# <=24, increase batch size instead of decreasing learning rate
 train_crop=32		#256: batch_size=8
@@ -181,7 +181,7 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 				])
 		elif train_crop!=0:#train
 			self.transforms_x=torchvision.transforms.Compose([
-				#torchvision.transforms.Lambda(cropTL),
+				torchvision.transforms.Lambda(cropTL),#
 				#torchvision.transforms.Resize(train_crop),#
 				torchvision.transforms.RandomCrop(train_crop),
 				torchvision.transforms.RandomHorizontalFlip(),
