@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import math
 
 #codec03: causal pixel predictor
 
@@ -17,10 +18,10 @@ def calc_invCR(x):
 	prob=torch.histc(x, 256, -1, 1)/x.nelement()
 	return torch.sum(-prob*torch.nan_to_num(torch.log2(prob), 0, 0, 0)).item()/8
 
-def inv2str(digits, decimals, x):
-	if x>0:
-		return '%*.*f'%(digits, decimals, 1/x)
-	return '%*s'%(digits, 'inf')
+def safe_inv(x):
+	if x!=0:
+		return 1/x
+	return math.inf
 
 class Codec(nn.Module):
 	def __init__(self):
@@ -77,7 +78,7 @@ class Codec(nn.Module):
 		self.csum0+=invCR0*b
 		self.csum1+=invCR1*b
 		self.count+=b
-		return loss1, 'RMSE%7.2lf ->%7.2f  CR%s ->%s'%(loss0, loss1.item(), inv2str(7, 2, invCR0), inv2str(7, 2, invCR1))
+		return loss1, 'RMSE%7.2lf ->%7.2f  CR%7.2f ->%7.2f'%(loss0, loss1.item(), safe_inv(invCR0), safe_inv(invCR1))
 
 	def epoch_start(self):
 		self.esum0=0
@@ -90,6 +91,6 @@ class Codec(nn.Module):
 		invCR1=self.csum1/self.count
 		rmse0=self.esum0/self.count
 		rmse1=self.esum1/self.count
-		return invCR1, 'RMSE%9.4lf %9.4f  CR%s %s'%(rmse0, rmse1, inv2str(9, 4, invCR0), inv2str(9, 4, invCR1))
+		return invCR1, 'RMSE%9.4lf %9.4f  CR%9.4f %9.4f'%(rmse0, rmse1, safe_inv(invCR0), safe_inv(invCR1))
 	def checkpoint_msg(self):
 		pass
