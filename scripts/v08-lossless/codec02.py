@@ -1,6 +1,8 @@
+#2023-10-02
 import torch
 from torch import nn
-#import math
+
+#codec02: adaptive reversible color transform	X  bad
 
 #Conv2d:		Dout = floor((Din + 2*padding - dilation*(kernel-1) - 1)/stride + 1)
 #ConvTranspose2d:	Dout = (Din-1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1

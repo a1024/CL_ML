@@ -23,14 +23,14 @@ from torchsummary import summary
 
 
 ## config ##
-from codec01 import Codec
-modelname='C01'
-pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+from codec03 import Codec
+modelname='C03'
+pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
 epochs=10
-lr=0.00001*0.75**1	#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
-batch_size=16		# <=24, increase batch size instead of decreasing learning rate
+lr=0.00001*0.75**6	#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+batch_size=30		# <=24, increase batch size instead of decreasing learning rate
 train_crop=128		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
@@ -52,9 +52,11 @@ if laptop:
 	path_val='C:/Projects/datasets/dataset-CLIC30'
 	path_test='C:/Projects/datasets/dataset-kodak'
 else:
+	path_train='C:/datasets'
 	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 	#path_train='D:/ML/datasets-train/dataset-caltech256'
-	path_train='D:/ML/dataset-openimages/images'
+	#path_train='D:/ML/dataset-openimages'
+	#path_train='D:/ML/dataset-openimages/images'
 	#path_train='D:/ML/dataset-CLIC'		# best at 1:1
 	#path_train='D:/ML/dataset-AWM'
 	#path_train='D:/ML/dataset-CLIC-small'
@@ -473,14 +475,20 @@ def calc_csize(p0, bits):
 def calc_loss(x):
 	x=x.to(device)
 
+	#vmin0=torch.min(x)	#[0, 1]
+	#vmax0=torch.max(x)
 	x*=2
 	x-=1
+	#vmin1=torch.min(x)	#[-1, 1]
+	#vmax1=torch.max(x)
+	#print(vmin0, ' ', vmax0, '  ', vmin1, ' ', vmax1)
 
-	#x*=255		#color transform (optional)
+	#x*=255		#X
 	#x+=0.5
 	#x*=1/256
-	#x=color_transform_YCoCb(x)
-	#x=torch.fmod(x+1, 2)-1		#[-1, 1]
+
+	x=color_transform_YCoCb(x)		#color transform (optional)
+	x=torch.fmod(x+1, 2)-1		#[-1, 1]
 
 	return model(x)
 

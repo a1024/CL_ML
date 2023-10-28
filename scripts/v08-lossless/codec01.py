@@ -1,5 +1,8 @@
+#2023-09-25
 import torch
 from torch import nn
+
+#codec01: L3C-Pytorch
 
 #Conv2d:		Dout = floor((Din + 2*padding - dilation*(kernel-1) - 1)/stride + 1)
 #ConvTranspose2d:	Dout = (Din-1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1
@@ -93,7 +96,7 @@ class Decoder(nn.Module):
 def calc_csize(x, binsize, mean, conf, wmix):
 	loss=torch.sigmoid((x+binsize/2-mean)*conf)-torch.sigmoid((x-binsize/2-mean)*conf)
 	den=torch.sigmoid((1+binsize/2-mean)*conf)-torch.sigmoid((-1-binsize/2-mean)*conf)
-	den=torch.clamp(den, 0.0001, None)
+	den=torch.clamp(den, 0.001, None)
 	loss=torch.sum(wmix*loss/den, dim=3)	#combined probability
 	loss=-torch.log2(loss)			#csize
 	loss=loss.sum()
@@ -144,7 +147,7 @@ class Codec(nn.Module):				#L3C-Pytorch
 		self.usize=0
 		self.csize=0
 
-		#loss_func=nn.CrossEntropyLoss()
+		#loss_func=nn.CrossEntropyLoss()	#X
 
 		self.K=10	# number of estimators
 
