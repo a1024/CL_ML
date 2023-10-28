@@ -28,10 +28,11 @@ modelname='C03'
 pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=10
-lr=0.00001*0.75**6	#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
-batch_size=30		# <=24, increase batch size instead of decreasing learning rate
-train_crop=128		#256: batch_size=8
+epochs=50
+lr=0.00002		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+#lr=0.00001*0.75**6
+batch_size=16		# <=24, increase batch size instead of decreasing learning rate
+train_crop=32		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
@@ -46,9 +47,9 @@ weight_decay=0#.0035	# increase if overfit
 
 justexportweights=0
 
-laptop=0
+laptop=1
 if laptop:
-	path_train='C:/Projects/datasets/dataset-CLIC'
+	path_train='C:/Projects/datasets/dataset-train'
 	path_val='C:/Projects/datasets/dataset-CLIC30'
 	path_test='C:/Projects/datasets/dataset-kodak'
 else:
@@ -517,7 +518,7 @@ if dataset_val is not None:#initial validation
 
 			print('%6d/%6d =%6.2f%%  %s'%(k+1, nval, 100*(k+1)/nval, msg), end='\r')
 		val_loss, val_msg=model.epoch_end()
-	print('E%4d [%10f,%10f]  V %s  elapsed %10f '%(0, 0, 0, val_msg, 0))
+	print('E%4d [%10f,%10f]  V %s  elapsed %10f '%(0, 0, 0, val_msg, (time.time()-start)/60))
 
 for epoch in range(epochs):		#TRAIN loop
 	it=0
@@ -630,7 +631,7 @@ print('Train elapsed: '+str(timedelta(seconds=end-start)))
 if epochs:
 	if save_records:
 		load_model(model, modelname+'.pth.tar')
-	torch.save(model.state_dict(), '%s-%s-CR%s.pth.tar'%(modelname, time.strftime('%Y%m%d-%H%M%S'), val_msg))
+	torch.save(model.state_dict(), '%s-%s-CR%s.pth.tar'%(modelname, time.strftime('%Y%m%d_%H-%M-%S'), val_msg))
 
 '''
 cr_kodak_jxl=[
