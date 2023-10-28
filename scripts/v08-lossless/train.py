@@ -161,7 +161,7 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 
 		if is_test==1:
 			self.transforms_x=torchvision.transforms.Compose([
-				#torchvision.transforms.Lambda(cropTL),
+				torchvision.transforms.Lambda(cropTL),
 				#torchvision.transforms.RandomCrop(train_crop),#
 				torchvision.transforms.ToTensor(),
 				torchvision.transforms.Lambda(ensureChannels)
@@ -181,7 +181,7 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 				])
 		elif train_crop!=0:#train
 			self.transforms_x=torchvision.transforms.Compose([
-				torchvision.transforms.Lambda(cropTL),#
+				#torchvision.transforms.Lambda(cropTL),
 				#torchvision.transforms.Resize(train_crop),#
 				torchvision.transforms.RandomCrop(train_crop),
 				torchvision.transforms.RandomHorizontalFlip(),
