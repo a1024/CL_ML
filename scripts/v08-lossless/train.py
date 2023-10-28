@@ -28,7 +28,7 @@ modelname='C03'
 pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=50
+epochs=74
 lr=0.00001		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
 batch_size=128		# <=24, increase batch size instead of decreasing learning rate
