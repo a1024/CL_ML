@@ -25,19 +25,19 @@ from torchsummary import summary
 ## config ##
 from codec03 import Codec
 modelname='C03'
-pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
 epochs=50
-lr=0.00002		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+lr=0.00001		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
-batch_size=16		# <=24, increase batch size instead of decreasing learning rate
+batch_size=128		# <=24, increase batch size instead of decreasing learning rate
 train_crop=32		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
 detect_anomalies=0	#enable for debugging CRASHES
-initial_test=1
+force_cpu=0		#GPU is faster
 
 clip_grad=1		# enable if got nan
 use_SGD=0		# enable if got nan or overfit
@@ -47,13 +47,14 @@ weight_decay=0#.0035	# increase if overfit
 
 justexportweights=0
 
-laptop=1
+laptop=0
 if laptop:
 	path_train='C:/Projects/datasets/dataset-train'
 	path_val='C:/Projects/datasets/dataset-CLIC30'
 	path_test='C:/Projects/datasets/dataset-kodak'
 else:
-	path_train='C:/datasets'
+	path_train='C:/datasets2'	#    903 samples
+	#path_train='C:/datasets'	# 167056 samples
 	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 	#path_train='D:/ML/datasets-train/dataset-caltech256'
 	#path_train='D:/ML/dataset-openimages'
@@ -78,7 +79,7 @@ else:
 
 use_cuda=0
 device_name='cpu'
-if torch.cuda.is_available() and torch.cuda.device_count()>0:
+if not force_cpu and torch.cuda.is_available() and torch.cuda.device_count()>0:
 	use_cuda=1
 	device_name='cuda:0'
 print('Started on %s, %s, LR=%f, Batch=%d, Records=%d, SGD=%d, dataset=\'%s\', pretrained=%d, wd=%f, epochs=%d'%(time.strftime('%Y-%m-%d %H:%M:%S'), device_name, lr, batch_size, save_records, use_SGD, path_train, pretrained, weight_decay, epochs))
@@ -209,7 +210,7 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 		return os.path.getsize(self.filenames[index])
 
 
-def color_transform_YCoCb(x):#YCoCg-R with g & b swapped
+def color_transform_YCmCb(x):#YCoCg-R with g & b swapped
 	r, g, b=torch.split(x, 1, dim=1)
 
 	r-=g
@@ -488,7 +489,7 @@ def calc_loss(x):
 	#x+=0.5
 	#x*=1/256
 
-	x=color_transform_YCoCb(x)		#color transform (optional)
+	x=color_transform_YCmCb(x)		#color transform (optional)
 	x=torch.fmod(x+1, 2)-1		#[-1, 1]
 
 	return model(x)
