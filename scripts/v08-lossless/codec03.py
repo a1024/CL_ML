@@ -64,7 +64,7 @@ class Codec(nn.Module):
 				x2=nn.functional.leaky_relu(self.dense01(t))
 				x2=nn.functional.leaky_relu(self.dense02(x2))
 				x2=nn.functional.leaky_relu(self.dense03(x2))
-				x2=nn.functional.leaky_relu(self.dense04(x2))+t
+				x2=nn.functional.leaky_relu(self.dense04(x2))#+t
 				x2=nn.functional.leaky_relu(self.dense05(x2))
 				x2=nn.functional.leaky_relu(self.dense06(x2))
 				x2=torch.clamp(self.dense07(x2), -1, 1)
