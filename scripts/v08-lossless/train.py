@@ -31,7 +31,7 @@ save_records=0
 epochs=50
 lr=0.00002		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
-batch_size=128		# <=24, increase batch size instead of decreasing learning rate
+batch_size=256		# <=24, increase batch size instead of decreasing learning rate
 train_crop=32		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
@@ -53,8 +53,8 @@ if laptop:
 	path_val='C:/Projects/datasets/dataset-CLIC30'
 	path_test='C:/Projects/datasets/dataset-kodak'
 else:
-	path_train='C:/datasets2'	#    903 samples
-	#path_train='C:/datasets'	# 167056 samples
+	#path_train='C:/datasets2'	#    903 samples
+	path_train='C:/datasets'	# 167056 samples
 	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 	#path_train='D:/ML/datasets-train/dataset-caltech256'
 	#path_train='D:/ML/dataset-openimages'
@@ -332,7 +332,7 @@ def exportweights(filename, model):
 						for row in kernel:
 							for val in row:
 								#file.write('\t'+val.item().hex())
-								file.write('\t'+str(val.item()))
+								file.write(' %22.18f,'%val.item())
 							file.write('\n')
 						file.write('\n')
 					file.write('\n')
@@ -342,7 +342,7 @@ def exportweights(filename, model):
 					for row in matrix:
 						for val in row:
 							#file.write('\t'+val.item().hex())
-							file.write('\t'+str(val.item()))
+							file.write(' %22.18f,'%val.item())
 						file.write('\n')
 					file.write('\n')
 				file.write('\n')
@@ -350,13 +350,13 @@ def exportweights(filename, model):
 				for row in param:
 					for val in row:
 						#file.write('\t'+val.item().hex())
-						file.write('\t'+str(val.item()))
+						file.write(' %22.18f,'%val.item())
 					file.write('\n')
 				file.write('\n')
 			elif dim==1:
 				for val in param:
 					#file.write('\t'+val.item().hex())
-					file.write('\t'+str(val.item()))
+					file.write(' %22.18f,'%val.item())
 				file.write('\n')
 	return maxdim
 
@@ -623,8 +623,7 @@ for epoch in range(epochs):		#TRAIN loop
 	#		for param in model.parameters():
 	#			param.add_(torch.randn(param.size(), device=param.device)*0.01)
 
-	print('E%4d [%10f,%10f]  T %s  V %s  elapsed %10f '%(epoch+1, distance_current, distance_delta, train_msg, val_msg, (t2-start)/60), end='')
-	print(str(timedelta(seconds=t2-start))+record)
+	print('E%4d [%10f,%10f]  T %s  V %s  elapsed%11f %15s %s'%(epoch+1, distance_current, distance_delta, train_msg, val_msg, (t2-start)/60, str(timedelta(seconds=t2-start)), record), end='')
 
 end=time.time()
 print('Train elapsed: '+str(timedelta(seconds=end-start)))
@@ -632,7 +631,7 @@ print('Train elapsed: '+str(timedelta(seconds=end-start)))
 if epochs:
 	if save_records:
 		load_model(model, modelname+'.pth.tar')
-	torch.save(model.state_dict(), '%s-%s-CR%s.pth.tar'%(modelname, time.strftime('%Y%m%d_%H-%M-%S'), val_msg))
+	torch.save(model.state_dict(), '%s-%s-%s.pth.tar'%(modelname, time.strftime('%Y%m%d_%H-%M-%S'), val_msg))
 
 '''
 cr_kodak_jxl=[
