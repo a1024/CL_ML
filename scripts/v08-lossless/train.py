@@ -28,11 +28,11 @@ modelname='C03'
 pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=25
-lr=0.00002		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+epochs=15
+lr=0.00005		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
-batch_size=16		# <=24, increase batch size instead of decreasing learning rate
-train_crop=32		#256: batch_size=8
+batch_size=32		# <=24, increase batch size instead of decreasing learning rate
+train_crop=64		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
@@ -489,7 +489,7 @@ def calc_loss(x):
 	#x+=0.5
 	#x*=1/256
 
-	x=color_transform_YCmCb(x)		#color transform (optional)
+	x=color_transform_YCmCb(x)	#color transform (optional)
 	x=torch.fmod(x+1, 2)-1		#[-1, 1]
 
 	return model(x)
@@ -623,8 +623,7 @@ for epoch in range(epochs):		#TRAIN loop
 	#		for param in model.parameters():
 	#			param.add_(torch.randn(param.size(), device=param.device)*0.01)
 
-	print('E%4d [%10f,%10f]  T %s  V %s  elapsed %10f '%(epoch+1, distance_current, distance_delta, train_msg, val_msg, (t2-start)/60), end='')
-	print(str(timedelta(seconds=t2-start))+record)
+	print('E%4d [%10f,%10f]  T %s  V %s  elapsed%11f %15s %s'%(epoch+1, distance_current, distance_delta, train_msg, val_msg, (t2-start)/60, str(timedelta(seconds=t2-start)), record))
 
 end=time.time()
 print('Train elapsed: '+str(timedelta(seconds=end-start)))

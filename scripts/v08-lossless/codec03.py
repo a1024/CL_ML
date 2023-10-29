@@ -68,11 +68,13 @@ class Codec(nn.Module):
 				x2=nn.functional.leaky_relu(self.dense05(x2))
 				x2=nn.functional.leaky_relu(self.dense06(x2))
 				x2=torch.clamp(self.dense07(x2), -1, 1)
+
 				delta=x[:, :, ky2:ky2+1, kx2:kx2+1]-x2.view(b, c, 1, 1)
+				delta=torch.fmod(delta+1, 2)-1		#[-1, 1]
+
 				row=torch.cat((row, delta), dim=3)
 				deltas=torch.cat((deltas[:, :, :-1, :], torch.cat((zeros[:, :, :, :self.reach], row, zeros[:, :, :, kx2+1:]), dim=3)), dim=2)
 			deltas=torch.cat((deltas, zeros), dim=2)
-		deltas=torch.fmod(deltas+1, 2)-1	#[-1, 1]
 
 		loss1=calc_RMSE(deltas)
 
