@@ -29,7 +29,7 @@ pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
 epochs=15
-lr=0.00005		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+lr=0.000020		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
 batch_size=32		# <=24, increase batch size instead of decreasing learning rate
 train_crop=64		#256: batch_size=8
