@@ -160,18 +160,10 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 				with open(cachename, 'w') as file:
 					json.dump(self.filenames, file, indent=0)
 
-		if is_test==1:
-			self.transforms_x=torchvision.transforms.Compose([
-				torchvision.transforms.Lambda(cropTL),
-				#torchvision.transforms.RandomCrop(train_crop),#
-				torchvision.transforms.ToTensor(),
-				torchvision.transforms.Lambda(ensureChannels)
-			])
-		elif is_test==2:#validation
+		if is_test==1 or is_test==2:#test or validation
 			if train_crop!=0:
 				self.transforms_x=torchvision.transforms.Compose([
 					torchvision.transforms.Lambda(cropTL),
-					#torchvision.transforms.RandomCrop(train_crop),#
 					torchvision.transforms.ToTensor(),
 					torchvision.transforms.Lambda(ensureChannels)
 				])
