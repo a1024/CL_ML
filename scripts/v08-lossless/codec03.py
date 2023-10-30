@@ -30,6 +30,31 @@ def safe_inv(x):
 		return 1/x
 	return math.inf
 
+class Predictor(nn.Module):
+	def __init__(self, r, nch):
+		super(Predictor, self).__init__()
+		self.reach=r
+		self.nnb=2*(self.reach+1)*self.reach
+		self.ci=self.nnb*2
+		self.dense01=nn.Linear(self.ci, nch)
+		self.dense02=nn.Linear(nch, nch)
+		self.dense03=nn.Linear(nch, nch)
+		self.dense04=nn.Linear(nch, nch)
+		self.dense05=nn.Linear(nch, nch)
+		self.dense06=nn.Linear(nch, nch)
+		self.dense07=nn.Linear(nch, nch)
+		self.dense08=nn.Linear(nch, 1)
+	def forward(self, x):
+		x=nn.functional.leaky_relu(self.dense01(x))
+		x=nn.functional.leaky_relu(self.dense02(x))
+		x=nn.functional.leaky_relu(self.dense03(x))
+		x=nn.functional.leaky_relu(self.dense04(x))
+		x=nn.functional.leaky_relu(self.dense05(x))
+		x=nn.functional.leaky_relu(self.dense06(x))
+		x=nn.functional.leaky_relu(self.dense07(x))
+		x=torch.clamp(self.dense08(x), -1, 1)
+		return x
+
 class Codec(nn.Module):
 	def __init__(self):
 		super(Codec, self).__init__()
@@ -37,13 +62,18 @@ class Codec(nn.Module):
 		self.reach=3
 		self.nnb=2*(self.reach+1)*self.reach
 		self.ci=self.nnb*2
-		self.dense01=nn.Linear(self.ci, self.ci)
-		self.dense02=nn.Linear(self.ci, self.ci)
-		self.dense03=nn.Linear(self.ci, self.ci)
-		self.dense04=nn.Linear(self.ci, self.ci)
-		self.dense05=nn.Linear(self.ci, self.nnb)
-		self.dense06=nn.Linear(self.nnb, self.nnb//2)
-		self.dense07=nn.Linear(self.nnb//2, 1)
+
+		self.pred01=Predictor(3, 16)#reach must be same everywhere TODO remove limitation by early splitting
+		self.pred02=Predictor(3, 32)#a larger model for luma
+		self.pred03=Predictor(3, 16)
+
+		#self.dense01=nn.Linear(self.ci, self.ci)
+		#self.dense02=nn.Linear(self.ci, self.ci)
+		#self.dense03=nn.Linear(self.ci, self.ci)
+		#self.dense04=nn.Linear(self.ci, self.ci)
+		#self.dense05=nn.Linear(self.ci, self.nnb)
+		#self.dense06=nn.Linear(self.nnb, self.nnb//2)
+		#self.dense07=nn.Linear(self.nnb//2, 1)
 
 		self.esum0=0#RMSE - before
 		self.esum1=0#RMSE - after
@@ -55,25 +85,30 @@ class Codec(nn.Module):
 		b, c, h, w=x.shape
 		deltas=torch.zeros(b, c, self.reach+1, w, dtype=x.dtype, device=x.device)
 		zeros=torch.zeros(b, c, 1, w, dtype=x.dtype, device=x.device)
-		for ky in range(h-self.reach*2):
-			ky2=ky+self.reach
+		for ky in range(self.reach, h-self.reach):
 			row=torch.zeros(b, c, 1, 0, dtype=x.dtype, device=x.device)
-			for kx in range(w-self.reach*2):
-				kx2=kx+self.reach
-				t=torch.cat((get_nb(x, self.reach, kx2, ky2), get_nb(deltas, self.reach, kx2, ky2)), dim=2)
-				x2=nn.functional.leaky_relu(self.dense01(t))
-				x2=nn.functional.leaky_relu(self.dense02(x2))
-				x2=nn.functional.leaky_relu(self.dense03(x2))
-				x2=nn.functional.leaky_relu(self.dense04(x2))#+t
-				x2=nn.functional.leaky_relu(self.dense05(x2))
-				x2=nn.functional.leaky_relu(self.dense06(x2))
-				x2=torch.clamp(self.dense07(x2), -1, 1)
+			for kx in range(self.reach, w-self.reach):
+				x2=torch.cat((get_nb(x, self.reach, kx, ky), get_nb(deltas, self.reach, kx, ky)), dim=2)
 
-				delta=x[:, :, ky2:ky2+1, kx2:kx2+1]-x2.view(b, c, 1, 1)
+				cm, y, cb=torch.split(x2, 1, dim=1)
+				cm=self.pred01(cm)
+				y =self.pred02(y )
+				cb=self.pred03(cb)
+				x2=torch.cat((cm, y, cb), dim=1)
+
+				#x2=nn.functional.leaky_relu(self.dense01(x2))
+				#x2=nn.functional.leaky_relu(self.dense02(x2))
+				#x2=nn.functional.leaky_relu(self.dense03(x2))
+				#x2=nn.functional.leaky_relu(self.dense04(x2))
+				#x2=nn.functional.leaky_relu(self.dense05(x2))
+				#x2=nn.functional.leaky_relu(self.dense06(x2))
+				#x2=torch.clamp(self.dense07(x2), -1, 1)
+
+				delta=x[:, :, ky:ky+1, kx:kx+1]-x2.view(b, c, 1, 1)
 				delta=torch.fmod(delta+1, 2)-1		#[-1, 1]
 
 				row=torch.cat((row, delta), dim=3)
-				deltas=torch.cat((deltas[:, :, :-1, :], torch.cat((zeros[:, :, :, :self.reach], row, zeros[:, :, :, kx2+1:]), dim=3)), dim=2)
+				deltas=torch.cat((deltas[:, :, :-1, :], torch.cat((zeros[:, :, :, :self.reach], row, zeros[:, :, :, kx+1:]), dim=3)), dim=2)
 			deltas=torch.cat((deltas, zeros), dim=2)
 
 		loss1=calc_RMSE(deltas)

@@ -25,11 +25,11 @@ from torchsummary import summary
 ## config ##
 from codec03 import Codec
 modelname='C03'
-pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=15
-lr=0.000020		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+epochs=50
+lr=0.000050		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
 batch_size=32		# <=24, increase batch size instead of decreasing learning rate
 train_crop=64		#256: batch_size=8
@@ -89,7 +89,8 @@ device=torch.device(device_name)
 #	matplotlib.use('Qt5agg')
 
 def cropTL(image):#PIL image
-	return torchvision.transforms.functional.crop(image, image.height-train_crop, image.width-train_crop, train_crop, train_crop)#64
+	return torchvision.transforms.functional.crop(image, 0, 0, train_crop, train_crop)
+	#return torchvision.transforms.functional.crop(image, image.height-train_crop, image.width-train_crop, train_crop, train_crop)#64
 
 def ensureChannels(x):
 	global device
@@ -209,6 +210,17 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 	def get_size(self, index):
 		return os.path.getsize(self.filenames[index])
 
+
+def color_transform_YCmCb_int(x):#YCoCg-R with g & b swapped
+	r, g, b=torch.split(x, 1, dim=1)
+
+	r-=g
+	g+=(r*0.5).int()
+	b-=g
+	g+=(b*0.5).int()
+
+	x=torch.cat((r, g, b), dim=1)#{Co, Y, Cb}
+	return x
 
 def color_transform_YCmCb(x):#YCoCg-R with g & b swapped
 	r, g, b=torch.split(x, 1, dim=1)
@@ -477,19 +489,9 @@ def calc_csize(p0, bits):
 def calc_loss(x):
 	x=x.to(device)
 
-	#vmin0=torch.min(x)	#[0, 1]
-	#vmax0=torch.max(x)
 	x*=2
 	x-=1
-	#vmin1=torch.min(x)	#[-1, 1]
-	#vmax1=torch.max(x)
-	#print(vmin0, ' ', vmax0, '  ', vmin1, ' ', vmax1)
-
-	#x*=255		#X
-	#x+=0.5
-	#x*=1/256
-
-	x=color_transform_YCmCb(x)	#color transform (optional)
+	x=color_transform_YCmCb(x)
 	x=torch.fmod(x+1, 2)-1		#[-1, 1]
 
 	return model(x)
