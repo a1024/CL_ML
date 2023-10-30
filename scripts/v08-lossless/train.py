@@ -23,16 +23,16 @@ from torchsummary import summary
 
 
 ## config ##
-from codec03 import Codec
-modelname='C03'
+from codec04 import Codec
+modelname='C04'
 pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
 epochs=50
 lr=0.000050		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
-batch_size=32		# <=24, increase batch size instead of decreasing learning rate
-train_crop=64		#256: batch_size=8
+batch_size=16		# <=24, increase batch size instead of decreasing learning rate
+train_crop=32		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
@@ -47,7 +47,7 @@ weight_decay=0#.0035	# increase if overfit
 
 justexportweights=0
 
-laptop=1
+laptop=0
 if laptop:
 	path_train='C:/Projects/datasets/dataset-train'
 	path_val='C:/Projects/datasets/dataset-CLIC30'
@@ -491,8 +491,8 @@ def calc_loss(x):
 
 	x*=2
 	x-=1
-	x=color_transform_YCmCb(x)
-	x=torch.fmod(x+1, 2)-1		#[-1, 1]
+	#x=color_transform_YCmCb(x)
+	#x=torch.fmod(x+1, 2)-1		#[-1, 1]
 
 	return model(x)
 
