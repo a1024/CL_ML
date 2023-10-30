@@ -23,15 +23,15 @@ from torchsummary import summary
 
 
 ## config ##
-from codec05 import Codec
-modelname='C05'
-pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+from codec06 import Codec
+modelname='C06'
+pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=25
+epochs=50
 lr=0.000050		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
-batch_size=96		# <=24, increase batch size instead of decreasing learning rate
+batch_size=32		# <=24, increase batch size instead of decreasing learning rate
 train_crop=32		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
@@ -47,7 +47,7 @@ weight_decay=0#.0035	# increase if overfit
 
 justexportweights=0
 
-laptop=0
+laptop=1
 if laptop:
 	path_train='C:/Projects/datasets/dataset-train'
 	path_val='C:/Projects/datasets/dataset-CLIC30'
