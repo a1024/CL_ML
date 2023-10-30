@@ -23,16 +23,16 @@ from torchsummary import summary
 
 
 ## config ##
-from codec06 import Codec
-modelname='C06'
-pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+from codec07 import Codec
+modelname='C07'
+pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
 epochs=20
 lr=0.000050		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6
-batch_size=256		# <=24, increase batch size instead of decreasing learning rate
-train_crop=16		#256: batch_size=8
+batch_size=8		# <=24, increase batch size instead of decreasing learning rate
+train_crop=256		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
@@ -625,7 +625,7 @@ print('Train elapsed: '+str(timedelta(seconds=end-start)))
 if epochs:
 	if save_records:
 		load_model(model, modelname+'.pth.tar')
-	torch.save(model.state_dict(), '%s-%s-CR%s.pth.tar'%(modelname, time.strftime('%Y%m%d_%H-%M-%S'), val_msg))
+	torch.save(model.state_dict(), '%s-%s-%s.pth.tar'%(modelname, time.strftime('%Y%m%d_%H-%M-%S'), val_msg))
 
 '''
 cr_kodak_jxl=[
