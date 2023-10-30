@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import math
 
-#codec04: causal joint RGB predictor
+#codec03: causal pixel predictor
 
 #Conv2d:		Dout = floor((Din + 2*padding - dilation*(kernel-1) - 1)/stride + 1)
 #ConvTranspose2d:	Dout = (Din-1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1
@@ -31,7 +31,7 @@ def safe_inv(x):
 	return math.inf
 
 class Predictor(nn.Module):
-	def __init__(self, ci, nch):
+	def __init__(self, ci, nch, co):
 		super(Predictor, self).__init__()
 		self.dense01=nn.Linear(ci, nch)
 		self.dense02=nn.Linear(nch, nch)
@@ -40,7 +40,7 @@ class Predictor(nn.Module):
 		self.dense05=nn.Linear(nch, nch)
 		self.dense06=nn.Linear(nch, nch)
 		self.dense07=nn.Linear(nch, nch)
-		self.dense08=nn.Linear(nch, 3)
+		self.dense08=nn.Linear(nch, co)
 	def forward(self, x):
 		x=nn.functional.leaky_relu(self.dense01(x))
 		x=nn.functional.leaky_relu(self.dense02(x))
@@ -56,11 +56,14 @@ class Codec(nn.Module):
 	def __init__(self):
 		super(Codec, self).__init__()
 
-		self.reach=3
-		self.nnb=2*(self.reach+1)*self.reach
-		self.ci=self.nnb*2
+		self.reach=1
+		self.naux=8
+		self.ci=2*(self.reach+1)*self.reach*(2+self.naux)
+		self.co=self.naux+1
 
-		self.pred01=Predictor(144, 64)
+		self.pred01=Predictor(self.ci, 32, self.co)
+		self.pred02=Predictor(self.ci, 64, self.co)#a larger model for luma
+		self.pred03=Predictor(self.ci, 32, self.co)
 
 		self.esum0=0#RMSE - before
 		self.esum1=0#RMSE - after
@@ -69,22 +72,60 @@ class Codec(nn.Module):
 		self.count=0
 
 	def forward(self, x):
+		'''
 		b, c, h, w=x.shape
 		deltas=torch.zeros(b, c, self.reach+1, w, dtype=x.dtype, device=x.device)
+		auxbuf=torch.zeros(b, c*self.naux, self.reach+1, w, dtype=x.dtype, device=x.device)
 		zeros=torch.zeros(b, c, 1, w, dtype=x.dtype, device=x.device)
 		for ky in range(self.reach, h-self.reach):
 			row=torch.zeros(b, c, 1, 0, dtype=x.dtype, device=x.device)
+			auxrow=torch.zeros(b, c*self.naux, 1, 0, dtype=x.dtype, device=x.device)
 			for kx in range(self.reach, w-self.reach):
-				x2=torch.cat((get_nb(x, self.reach, kx, ky), get_nb(deltas, self.reach, kx, ky)), dim=2).view(b, -1)
+				nb_c0, nb_c1, nb_c2=torch.split(get_nb(x, self.reach, kx, ky), 1, dim=1)
+				nb_e0, nb_e1, nb_e2=torch.split(get_nb(deltas, self.reach, kx, ky), 1, dim=1)
+				nb_a0, nb_a1, nb_a2=torch.split(get_nb(auxbuf, self.reach, kx, ky), 1, dim=1)
 
-				x2=self.pred01(x2)
+				a0, c0=torch.split(self.pred01(torch.cat((nb_c0, nb_e0, nb_a0), dim=1).view(b, -1)), self.naux, dim=1)
+				a1, c1=torch.split(self.pred02(torch.cat((nb_c1, nb_e1, nb_a1), dim=1).view(b, -1)), self.naux, dim=1)
+				a2, c2=torch.split(self.pred03(torch.cat((nb_c2, nb_e2, nb_a2), dim=1).view(b, -1)), self.naux, dim=1)
 
-				delta=x[:, :, ky:ky+1, kx:kx+1]-x2.view(b, c, 1, 1)
+				x2=torch.cat((c0, c1, c2), dim=1).view(b, c, 1, 1)
+				aux=torch.cat((a0, a1, a2), dim=1).view(b, c*self.naux, 1, 1)
+
+				delta=x[:, :, ky:ky+1, kx:kx+1]-x2
 				delta=torch.fmod(delta+1, 2)-1		#[-1, 1]
 
 				row=torch.cat((row, delta), dim=3)
 				deltas=torch.cat((deltas[:, :, :-1, :], torch.cat((zeros[:, :, :, :self.reach], row, zeros[:, :, :, kx+1:]), dim=3)), dim=2)
+
+				auxrow==torch.cat((auxrow, aux), dim=3)
+				auxbuf=torch.cat((auxbuf[:, :, :-1, :], torch.cat((zeros[:, :, :, :self.reach], auxrow, zeros[:, :, :, kx+1:]), dim=3)), dim=2)
 			deltas=torch.cat((deltas, zeros), dim=2)
+			auxbuf=torch.cat((auxbuf, zeros), dim=2)
+		'''
+
+		b, c, h, w=x.shape
+		deltas=torch.zeros(b, c*(self.naux+1), self.reach+1, w, dtype=x.dtype, device=x.device)
+		zeros=torch.zeros(b, c*(self.naux+1), 1, w, dtype=x.dtype, device=x.device)
+		for ky in range(self.reach, h-self.reach):
+			row=torch.zeros(b, c*(self.naux+1), 1, 0, dtype=x.dtype, device=x.device)
+			for kx in range(self.reach, w-self.reach):
+				nb_p0, nb_p1, nb_p2=torch.split(get_nb(x, self.reach, kx, ky), 1, dim=1)#pixels
+				nb_e0, nb_e1, nb_e2=torch.split(get_nb(deltas, self.reach, kx, ky), self.naux+1, dim=1)#errors with aux data
+
+				a0, p0=torch.split(self.pred01(torch.cat((nb_p0, nb_e0), dim=1).view(b, -1)), self.naux, dim=1)#{aux data, ...pred}
+				a1, p1=torch.split(self.pred02(torch.cat((nb_p1, nb_e1), dim=1).view(b, -1)), self.naux, dim=1)
+				a2, p2=torch.split(self.pred03(torch.cat((nb_p2, nb_e2), dim=1).view(b, -1)), self.naux, dim=1)
+
+				p0=(torch.fmod( x[:, 0:1, ky, kx]-p0 +1, 2)-1)		#[-1, 1]
+				p1=(torch.fmod( x[:, 1:2, ky, kx]-p1 +1, 2)-1)
+				p2=(torch.fmod( x[:, 2:3, ky, kx]-p2 +1, 2)-1)
+
+				row=torch.cat((row, torch.cat((a0, p0, a1, p1, a2, p2), dim=1).view(b, c*(self.naux+1), 1, 1)), dim=3)
+				deltas=torch.cat((deltas[:, :, :-1, :], torch.cat((zeros[:, :, :, :self.reach], row, zeros[:, :, :, kx+1:]), dim=3)), dim=2)
+			deltas=torch.cat((deltas, zeros), dim=2)
+		channels=torch.split(deltas, 1, dim=1)#remove aux data
+		deltas=torch.cat((channels[(self.naux+1)*0-1], channels[(self.naux+1)*1-1], channels[(self.naux+1)*2-1]), dim=1)#leave only the deltas
 
 		loss1=calc_RMSE(deltas)
 

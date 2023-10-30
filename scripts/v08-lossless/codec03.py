@@ -88,12 +88,12 @@ class Codec(nn.Module):
 		for ky in range(self.reach, h-self.reach):
 			row=torch.zeros(b, c, 1, 0, dtype=x.dtype, device=x.device)
 			for kx in range(self.reach, w-self.reach):
-				x2=torch.cat((get_nb(x, self.reach, kx, ky), get_nb(deltas, self.reach, kx, ky)), dim=2)
+				nb_cm, nb_y , nb_cb=torch.split(get_nb(x, self.reach, kx, ky), 1, dim=1)
+				nb_e0, nb_e1, nb_e2=torch.split(get_nb(deltas, self.reach, kx, ky), 1, dim=1)
 
-				cm, y, cb=torch.split(x2, 1, dim=1)
-				cm=self.pred01(cm)
-				y =self.pred02(y )
-				cb=self.pred03(cb)
+				cm=self.pred01(torch.cat((nb_cm, nb_e0), dim=1))
+				y =self.pred02(torch.cat((nb_y , nb_e1), dim=1))
+				cb=self.pred03(torch.cat((nb_cb, nb_e2), dim=1))
 				x2=torch.cat((cm, y, cb), dim=1)
 
 				#x2=nn.functional.leaky_relu(self.dense01(x2))
