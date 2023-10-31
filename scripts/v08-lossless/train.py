@@ -23,16 +23,16 @@ from torchsummary import summary
 
 
 ## config ##
-from codec07 import Codec
-modelname='C07'
-pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+from codec09 import Codec
+modelname='C09'
+pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=20
-lr=0.000050		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
-#lr=0.00001*0.75**6
-batch_size=8		# <=24, increase batch size instead of decreasing learning rate
-train_crop=256		#256: batch_size=8
+epochs=50
+lr=0.000100		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+#lr=0.00001*0.75**6	#C01-L3C
+batch_size=64		# <=24, increase batch size instead of decreasing learning rate
+train_crop=128		#256: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
@@ -53,8 +53,8 @@ if laptop:
 	path_val='C:/Projects/datasets/dataset-CLIC30'
 	path_test='C:/Projects/datasets/dataset-kodak'
 else:
-	path_train='C:/datasets2'	#    903 samples
-	#path_train='C:/datasets'	# 167056 samples
+	#path_train='C:/datasets2'	#    903 samples
+	path_train='C:/datasets'	# 167056 samples
 	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 	#path_train='D:/ML/datasets-train/dataset-caltech256'
 	#path_train='D:/ML/dataset-openimages'
@@ -160,7 +160,12 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 				with open(cachename, 'w') as file:
 					json.dump(self.filenames, file, indent=0)
 
-		if is_test==1 or is_test==2:#test or validation
+		if is_test==1:#test at 1:1
+			self.transforms_x=torchvision.transforms.Compose([
+				torchvision.transforms.ToTensor(),
+				torchvision.transforms.Lambda(ensureChannels)
+			])
+		elif is_test==2:#validation
 			if train_crop!=0:
 				self.transforms_x=torchvision.transforms.Compose([
 					torchvision.transforms.Lambda(cropTL),
