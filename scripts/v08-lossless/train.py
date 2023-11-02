@@ -23,16 +23,16 @@ from torchsummary import summary
 
 
 ## config ##
-from codec09 import Codec
-modelname='C09'
+from codec12 import Codec
+modelname='C12'
 pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=50
-lr=0.000100		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+epochs=30
+lr=0.000200		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6	#C01-L3C
-batch_size=64		# <=24, increase batch size instead of decreasing learning rate
-train_crop=128		#256: batch_size=8
+batch_size=1		# <=24, increase batch size instead of decreasing learning rate
+train_crop=1024		#192: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
@@ -47,14 +47,15 @@ weight_decay=0#.0035	# increase if overfit
 
 justexportweights=0
 
-laptop=1
+laptop=0
 if laptop:
 	path_train='C:/Projects/datasets/dataset-train'
 	path_val='C:/Projects/datasets/dataset-CLIC30'
 	path_test='C:/Projects/datasets/dataset-kodak'
 else:
-	#path_train='C:/datasets2'	#    903 samples
-	path_train='C:/datasets'	# 167056 samples
+	#path_train='C:/datasets'		# 167056 samples DON'T EXCEED CROP 255
+	#path_train='C:/datasets2'		#    903 samples
+	path_train='C:/datasets2/CLIC303'	#    303 samples WH 2048*1320
 	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 	#path_train='D:/ML/datasets-train/dataset-caltech256'
 	#path_train='D:/ML/dataset-openimages'
@@ -82,7 +83,7 @@ device_name='cpu'
 if not force_cpu and torch.cuda.is_available() and torch.cuda.device_count()>0:
 	use_cuda=1
 	device_name='cuda:0'
-print('Started on %s, %s, LR=%f, Batch=%d, Records=%d, SGD=%d, dataset=\'%s\', pretrained=%d, wd=%f, epochs=%d'%(time.strftime('%Y-%m-%d %H:%M:%S'), device_name, lr, batch_size, save_records, use_SGD, path_train, pretrained, weight_decay, epochs))
+print('Started on %s, %s, LR=%f, Batch=%d, Records=%d, SGD=%d, dataset=\'%s\', pretrained=%d, wd=%f, epochs=%d, crop %d'%(time.strftime('%Y-%m-%d %H:%M:%S'), device_name, lr, batch_size, save_records, use_SGD, path_train, pretrained, weight_decay, epochs, train_crop))
 device=torch.device(device_name)
 
 #if plot_grad:#https://stackoverflow.com/questions/61397176/how-to-keep-matplotlib-from-stealing-focus
