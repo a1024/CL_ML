@@ -24,15 +24,16 @@ from torchsummary import summary
 
 ## config ##
 from codec12 import Codec
-modelname='C12'
-pretrained=1		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
+modelname='C12_06'
+pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
 save_records=0
 
-epochs=30
-lr=0.000200		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
+epochs=5
+use_optim='sgd'		# use 'sgd' if got nan or overfit
+lr=0.010000		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6	#C01-L3C
-batch_size=1		# <=24, increase batch size instead of decreasing learning rate
-train_crop=1024		#192: batch_size=8
+batch_size=32		#32, <=24, increase batch size instead of decreasing learning rate
+train_crop=128		#128, 192: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
@@ -40,7 +41,6 @@ detect_anomalies=0	#enable for debugging CRASHES
 force_cpu=0		#GPU is faster
 
 clip_grad=1		# enable if got nan
-use_SGD=0		# enable if got nan or overfit
 model_summary=0
 plot_grad=0		# FOCUS-STEALING POP-UP		0 disabled   1 plot grad   2 plot log10 grad
 weight_decay=0#.0035	# increase if overfit
@@ -53,9 +53,9 @@ if laptop:
 	path_val='C:/Projects/datasets/dataset-CLIC30'
 	path_test='C:/Projects/datasets/dataset-kodak'
 else:
-	#path_train='C:/datasets'		# 167056 samples DON'T EXCEED CROP 255
+	path_train='C:/datasets'		# 167056 samples DON'T EXCEED CROP 255
 	#path_train='C:/datasets2'		#    903 samples
-	path_train='C:/datasets2/CLIC303'	#    303 samples WH 2048*1320
+	#path_train='C:/datasets2/CLIC303'	#    303 samples WH 2048*1320
 	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 	#path_train='D:/ML/datasets-train/dataset-caltech256'
 	#path_train='D:/ML/dataset-openimages'
@@ -83,7 +83,7 @@ device_name='cpu'
 if not force_cpu and torch.cuda.is_available() and torch.cuda.device_count()>0:
 	use_cuda=1
 	device_name='cuda:0'
-print('Started on %s, %s, LR=%f, Batch=%d, Records=%d, SGD=%d, dataset=\'%s\', pretrained=%d, wd=%f, epochs=%d, crop %d'%(time.strftime('%Y-%m-%d %H:%M:%S'), device_name, lr, batch_size, save_records, use_SGD, path_train, pretrained, weight_decay, epochs, train_crop))
+print('Started on %s, %s, LR=%f, %s, Batch=%d, Records=%d, dataset=\'%s\', pretrained=%d, wd=%f, epochs=%d, crop %d'%(time.strftime('%Y-%m-%d %H:%M:%S'), device_name, lr, use_optim, batch_size, save_records, path_train, pretrained, weight_decay, epochs, train_crop))
 device=torch.device(device_name)
 
 #if plot_grad:#https://stackoverflow.com/questions/61397176/how-to-keep-matplotlib-from-stealing-focus
@@ -264,66 +264,6 @@ def save_tensor_as_grid(x, nrows, name):
 	image.save(name, format='PNG')
 
 
-#def write4D(file, name, param):
-#	file.write('%s\t%d\t%d\t%d\t%d:\n'%(name, param.shape[0], param.shape[1], param.shape[2], param.shape[3]))
-#	for filt in param:
-#		for kernel in filt:
-#			for row in kernel:
-#				for val in row:
-#					file.write('\t'+val.item().hex())
-#					#file.write('\t%#X'%int(val.item()*0x100000000))
-#				file.write('\n')
-#			file.write('\n')
-#		file.write('\n')
-#	file.write('\n')
-#
-#def write1D(file, name, param):
-#	file.write('%s\t%d:\n'%(name, param.shape[0]))
-#	for val in param:
-#		file.write('\t'+val.item().hex())
-#		#file.write('\t%#X'%int(val.item()*0x100000000))
-#	file.write('\n')
-#
-#def catmul(top, bot, bn):
-#	x=torch.cat((bot, torch.zeros(bot.shape[0], bot.shape[1], bot.shape[2], top.shape[3]-bot.shape[3], dtype=bot.dtype, device=bot.device)), dim=3)
-#	x=torch.cat((top, x), dim=2)
-#	x=torch.split(x, 1, dim=0)
-#	b=torch.split(bn, 1, dim=0)
-#	y=[]
-#	for k in range(len(x)):
-#		y.append(x[k]*b[k])
-#	x=torch.cat(y, dim=0)
-#	return x
-#
-#def addmuladd(a, b, m, c):
-#	return (a+b)*m+c
-#
-#def exportC35(filename, model: CompressorModel):
-#	with torch.no_grad():
-#		with open(filename, 'w') as file:
-#			#write4D(file, 'predx.conv01.weight', model.predx.conv01.weight)
-#			#write1D(file, 'predx.conv01.bias',   model.predx.conv01.bias)
-#			#write4D(file, 'predx.conv02.weight', model.predx.conv02.weight)
-#			#write1D(file, 'predx.conv02.bias',   model.predx.conv02.bias)
-#
-#			write4D(file, 'pred.c01.weight',  catmul(model.pred.ct01.weight, model.pred.cl01.weight, model.pred.b01.weight))
-#			write1D(file, 'pred.c01.bias', addmuladd(model.pred.ct01.bias,   model.pred.cl01.bias,   model.pred.b01.weight, model.pred.b01.bias))
-#			write4D(file, 'pred.c02.weight',  catmul(model.pred.ct02.weight, model.pred.cl02.weight, model.pred.b02.weight))
-#			write1D(file, 'pred.c02.bias', addmuladd(model.pred.ct02.bias,   model.pred.cl02.bias,   model.pred.b02.weight, model.pred.b02.bias))
-#			write4D(file, 'pred.c03.weight',  catmul(model.pred.ct03.weight, model.pred.cl03.weight, model.pred.b03.weight))
-#			write1D(file, 'pred.c03.bias', addmuladd(model.pred.ct03.bias,   model.pred.cl03.bias,   model.pred.b03.weight, model.pred.b03.bias))
-#			write4D(file, 'pred.c04.weight',  catmul(model.pred.ct04.weight, model.pred.cl04.weight, model.pred.b04.weight))
-#			write1D(file, 'pred.c04.bias', addmuladd(model.pred.ct04.bias,   model.pred.cl04.bias,   model.pred.b04.weight, model.pred.b04.bias))
-#			write4D(file, 'pred.c05.weight',  catmul(model.pred.ct05.weight, model.pred.cl05.weight, model.pred.b05.weight))
-#			write1D(file, 'pred.c05.bias', addmuladd(model.pred.ct05.bias,   model.pred.cl05.bias,   model.pred.b05.weight, model.pred.b05.bias))
-#			write4D(file, 'pred.c06.weight',  catmul(model.pred.ct06.weight, model.pred.cl06.weight, model.pred.b06.weight))
-#			write1D(file, 'pred.c06.bias', addmuladd(model.pred.ct06.bias,   model.pred.cl06.bias,   model.pred.b06.weight, model.pred.b06.bias))
-#			write4D(file, 'pred.c07.weight',  catmul(model.pred.ct07.weight, model.pred.cl07.weight, model.pred.b07.weight))
-#			write1D(file, 'pred.c07.bias', addmuladd(model.pred.ct07.bias,   model.pred.cl07.bias,   model.pred.b07.weight, model.pred.b07.bias))
-#			write4D(file, 'pred.c08.weight',  catmul(model.pred.ct08.weight, model.pred.cl08.weight, model.pred.b08.weight))
-#			write1D(file, 'pred.c08.bias', addmuladd(model.pred.ct08.bias,   model.pred.cl08.bias,   model.pred.b08.weight, model.pred.b08.bias))
-
-
 
 def exportweights(filename, model):
 	maxdim=0
@@ -466,11 +406,15 @@ test_size=dataset_test.__len__()
 train_loader=DataLoader(dataset_train, batch_size=batch_size, shuffle=shuffle)#try num_workers=16
 test_loader=DataLoader(dataset_test, batch_size=1)#different resolutions at 1:1 can't be stacked
 
-if use_SGD:
+if use_optim=='sgd':
 	optimizer=optim.SGD(params=model.parameters(), lr=lr, weight_decay=weight_decay)
-else:
+elif use_optim=='adam':
+	optimizer=optim.Adam(params=model.parameters(), lr=lr, eps=0.0001, weight_decay=weight_decay)#https://discuss.pytorch.org/t/nan-after-50-epochs/75835/4
+elif use_optim=='adadelta':
+	optimizer=optim.Adadelta(params=model.parameters(), lr=lr, eps=0.0001, weight_decay=weight_decay)
+elif use_optim=='rmsprop':
 	optimizer=optim.RMSprop(params=model.parameters(), lr=lr, eps=0.0001, weight_decay=weight_decay)
-	#optimizer=optim.Adam(params=model.parameters(), lr=lr, eps=0.0001, weight_decay=weight_decay)#https://discuss.pytorch.org/t/nan-after-50-epochs/75835/4
+
 if reduce_lr_on_plateau:
 	scheduler=optim.lr_scheduler.ReduceLROnPlateau(optimizer)
 if use_cuda:
@@ -577,8 +521,9 @@ for epoch in range(epochs):		#TRAIN loop
 		val_loss=train_loss
 		val_msg=train_msg
 
-	#record=''
-	record='  LR %8lf'%optimizer.param_groups[0]['lr']
+	record=''
+	if reduce_lr_on_plateau:
+		record+='  LR %8lf'%optimizer.param_groups[0]['lr']
 	to_save=not save_records
 	bad_epoch=1
 

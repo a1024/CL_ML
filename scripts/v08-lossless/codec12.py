@@ -48,7 +48,7 @@ class CausalConv(nn.Module):
 
 		self.reach=reach
 		self.conv00T=nn.Conv2d(1, nch, (reach, reach<<1|1))#(Kh, Kw)
-		self.conv00L=nn.Conv2d(1, nch, (1, reach))
+		self.conv00L=nn.Conv2d(1, nch, (1, reach), bias=False)
 
 		self.layers=nn.ModuleList()
 		for kl in range(1, nlayers-1):
@@ -68,16 +68,12 @@ class Codec(nn.Module):
 	def __init__(self):
 		super(Codec, self).__init__()
 
-		self.reach=2		#pixel reach > error/aux reach
-		self.nlayers=16
-
-		self.blocksize=32	#just to improve train time
-
-		self.ci=2*(self.reach+1)*self.reach
-		self.nch=self.ci
-		self.co=1
-
-		self.pred01=CausalConv(2, 16, 12)
+		self.pred01=CausalConv(7, 8, 48)	#C12_06		kodim13		?
+		#self.pred01=CausalConv(7, 6, 64)	#C12_05		kodim13		1.86@10  1.95@20  1.95@30
+		#self.pred01=CausalConv(4, 4, 16)	#C12_04		kodim13		1.95@30
+		#self.pred01=CausalConv(3, 16, 32)	#C12_03		kodim13		1.94@20
+		#self.pred01=CausalConv(2, 8, 32)	#C12_02		kodim13		1.96@20  1.97@20+10
+		#self.pred01=CausalConv(2, 16, 12)	#C12_01		kodim13		1.88@100  1.95@100+110  1.95@100+110+100  1.93@100+110+200
 
 		self.esum0=0#RMSE - before
 		self.esum1=0#RMSE - after
@@ -87,7 +83,7 @@ class Codec(nn.Module):
 
 	def forward(self, x):
 		b, c, h, w=x.shape
-		x=x.view(b*c, 1, h, w)#a batch of channels
+		x=x.view(b*c, 1, h, w)#a batch of channels, because of conv2d
 
 		deltas=torch.fmod( x-self.pred01(x) +1, 2)-1
 
