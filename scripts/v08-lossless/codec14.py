@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import math
 
-#codec12: causal predictor
+#codec14: two-stage causal predictor
 
 #Conv2d:		Dout = floor((Din + 2*padding - dilation*(kernel-1) - 1)/stride + 1)
 #ConvTranspose2d:	Dout = (Din-1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1
@@ -43,17 +43,18 @@ class PixelPred(nn.Module):
 		return torch.clamp(self.layers.get_submodule('dense%02d'%(nlayers-1))(x), -1, 1)
 
 class CausalConv(nn.Module):
-	def __init__(self, reach, nlayers, nch):
+	def __init__(self, reach, nch):#nch must end with 1
 		super(CausalConv, self).__init__()
 
 		self.reach=reach
-		self.conv00T=nn.Conv2d(1, nch, (reach, reach<<1|1))#(Kh, Kw)
-		self.conv00L=nn.Conv2d(1, nch, (1, reach), bias=False)
+		self.conv00T=nn.Conv2d(1, nch[0], (reach, reach<<1|1))#(Kh, Kw)
+		self.conv00L=nn.Conv2d(1, nch[0], (1, reach), bias=False)
 
 		self.layers=nn.ModuleList()
-		for kl in range(1, nlayers-1):
-			self.layers.add_module('conv%02d'%kl, nn.Conv2d(nch, nch, 1))
-		self.layers.add_module('conv%02d'%(nlayers-1), nn.Conv2d(nch, 1, 1))
+		ci=2*(reach+1)*reach
+		for kl in range(len(nch)):
+			self.layers.add_module('conv%02d'%kl, nn.Conv2d(ci, nch[kl], 1))
+			ci=nch[kl]
 	def forward(self, x):
 		xt=self.conv00T(nn.functional.pad(x[:, :, :-1, :], (self.reach, self.reach, self.reach, 0)))#(L, R, T, B)
 		xl=self.conv00L(nn.functional.pad(x[:, :, :, :-1], (self.reach, 0, 0, 0)))
@@ -61,21 +62,15 @@ class CausalConv(nn.Module):
 
 		nlayers=len(self.layers)
 		for kl in range(1, nlayers-1):
-			x=nn.functional.leaky_relu(self.layers.get_submodule('conv%02d'%kl)(x)+x)
+			x=nn.functional.leaky_relu(self.layers.get_submodule('conv%02d'%kl)(x))
 		return torch.clamp(self.layers.get_submodule('conv%02d'%(nlayers-1))(x), -1, 1)
 
 class Codec(nn.Module):
 	def __init__(self):
 		super(Codec, self).__init__()
 
-		#self.pred01=CausalConv(2, 16, 12)	#C12_01		kodim13		1.88@100  1.95@100+110  1.95@100+110+100  1.93@100+110+200
-		#self.pred01=CausalConv(2, 8, 32)	#C12_02		kodim13		1.96@20  1.97@20+10
-		#self.pred01=CausalConv(3, 16, 32)	#C12_03		kodim13		1.94@20
-		#self.pred01=CausalConv(4, 4, 16)	#C12_04		kodim13		1.95@30
-		#self.pred01=CausalConv(7, 6, 64)	#C12_05		kodim13		1.86@10  1.95@20  1.95@30
-		#self.pred01=CausalConv(7, 8, 48)	#C12_06		kodim13		1.87@5*167056
-		#self.pred01=CausalConv(2, 32, 32)	#C12_07		kodim13		1.93@10
-		self.pred01=CausalConv(2, 16, 32)	#C12_07		kodim13		?
+		self.pred01=CausalConv(2, [16, 16, 16, 16, 16, 16, 16, 16, 1])	#C14_01		kodim13		?
+		self.pred02=CausalConv(2, [32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 1])
 
 		self.esum0=0#RMSE - before
 		self.esum1=0#RMSE - after
@@ -87,7 +82,9 @@ class Codec(nn.Module):
 		b, c, h, w=x.shape
 		x=x.view(b*c, 1, h, w)#a batch of channels, because of conv2d
 
-		deltas=torch.fmod( x-self.pred01(x) +1, 2)-1
+		deltas=x-self.pred01(x)
+		deltas=deltas-self.pred02(deltas)
+		deltas=torch.fmod(deltas+1, 2)-1	#[-1, 1]
 
 		loss1=calc_RMSE(deltas)
 

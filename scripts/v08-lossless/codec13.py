@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import math
 
-#codec11: causal pixel predictor with aux buffers (C06 with different hyperparams)
+#codec13: causal predictor
 
 #Conv2d:		Dout = floor((Din + 2*padding - dilation*(kernel-1) - 1)/stride + 1)
 #ConvTranspose2d:	Dout = (Din-1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1
@@ -47,8 +47,8 @@ class CausalConv(nn.Module):
 		super(CausalConv, self).__init__()
 
 		self.reach=reach
-		self.conv00T=nn.Conv2d(1, nch, (reach, reach<<1|1))#(Kh, Kw)
-		self.conv00L=nn.Conv2d(1, nch, (1, reach), bias=False)
+		self.conv00T=nn.Conv2d(1, nch[0], (reach, reach<<1|1))#(Kh, Kw)
+		self.conv00L=nn.Conv2d(1, nch[0], (1, reach), bias=False)
 
 		self.layers=nn.ModuleList()
 		ci=2*(reach+1)*reach
@@ -69,7 +69,10 @@ class Codec(nn.Module):
 	def __init__(self):
 		super(Codec, self).__init__()
 
-		self.pred01=CausalConv(8, [256, 128, 64, 32, 16, 8, 8, 1])	#C13_01		kodim13		?
+		#self.pred01=CausalConv(8, [256, 128, 64, 32, 16, 8, 8, 1])					#C13_01		kodim13		1.93@100 kodak
+		#self.pred01=CausalConv(2, [32, 32, 16, 16, 12, 12, 8, 8, 1])					#C13_02		kodim13		1.92@10  1.94@20
+		#self.pred01=CausalConv(2, [32, 32, 32, 32, 32, 32, 32, 32, 1])					#C13_03		kodim13		1.93@10  1.94@20  1.94@30
+		self.pred01=CausalConv(2, [16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 1])	#C13_04		kodim13		1.95@10
 
 		self.esum0=0#RMSE - before
 		self.esum1=0#RMSE - after
@@ -94,7 +97,7 @@ class Codec(nn.Module):
 		self.csum0+=invCR0*b
 		self.csum1+=invCR1*b
 		self.count+=b
-		return loss1, 'RMSE%7.2lf ->%7.2f  CR%7.2f ->%7.2f'%(loss0, loss1.item(), safe_inv(invCR0), safe_inv(invCR1))
+		return loss1, 'RMSE%9.4lf ->%9.4f  CR%9.4f ->%9.4f'%(loss0, loss1.item(), safe_inv(invCR0), safe_inv(invCR1))
 
 	def epoch_start(self):
 		self.esum0=0
