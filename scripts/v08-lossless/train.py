@@ -23,16 +23,16 @@ from torchsummary import summary
 
 
 ## config ##
-from codec14 import Codec
-modelname='C14_01'
-pretrained=0		# !!! SET PRETRAINED=1 AFTER FIRST RUN !!!
-save_records=0
+from codec16 import Codec
+modelname='C16_02'
+resume=1		# !!! SET RESUME=1 AFTER FIRST RUN !!!
+save_records=0		# this wastes progress
 
 epochs=10
 use_optim='adam'	# use 'sgd' if got nan or overfit
 lr=0.001000		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6	#C01-L3C
-batch_size=1		#32, <=24, increase batch size instead of decreasing learning rate
+batch_size=4		#32, <=24, increase batch size instead of decreasing learning rate
 train_crop=512		#128, 192: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
@@ -43,7 +43,7 @@ force_cpu=0		#GPU is faster
 clip_grad=1		# enable if got nan
 model_summary=0
 plot_grad=0		# FOCUS-STEALING POP-UP		0 disabled   1 plot grad   2 plot log10 grad
-weight_decay=0.0035	# increase if overfit
+weight_decay=0#.0035	# increase if overfit
 
 justexportweights=0
 
@@ -84,7 +84,7 @@ device_name='cpu'
 if not force_cpu and torch.cuda.is_available() and torch.cuda.device_count()>0:
 	use_cuda=1
 	device_name='cuda:0'
-print('Started on %s, %s, LR=%f, %s, Batch=%d, Records=%d, dataset=\'%s\', pretrained=%d, wd=%f, epochs=%d, crop %d'%(time.strftime('%Y-%m-%d %H:%M:%S'), device_name, lr, use_optim, batch_size, save_records, path_train, pretrained, weight_decay, epochs, train_crop))
+print('%s  Epochs %d  %s  %s LR %f  WD %f  Batch %d  Crop %d  Records %d  Train on \'%s\'  Resume %d'%(time.strftime('%Y-%m-%d %H:%M:%S'), epochs, device_name, use_optim, lr, weight_decay, batch_size, train_crop, save_records, path_train, resume))
 device=torch.device(device_name)
 
 #if plot_grad:#https://stackoverflow.com/questions/61397176/how-to-keep-matplotlib-from-stealing-focus
@@ -361,7 +361,7 @@ def get_params(model):#https://discuss.pytorch.org/t/plot-magnitude-of-gradient-
 
 
 model=Codec()
-if pretrained:
+if resume:
 	load_model(model, modelname+'.pth.tar')
 if use_cuda:
 	model=model.cuda()
@@ -676,7 +676,7 @@ if test_idx:
 	loss, msg=model.epoch_end()
 	print('Total  %s  Elapsed %f sec'%(msg, t_filt))
 model.checkpoint_msg()
-print('Finished on '+time.strftime('%Y-%m-%d %H:%M:%S'))
+print(time.strftime('%Y-%m-%d %H:%M:%S'))
 
 
 
