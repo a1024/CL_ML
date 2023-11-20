@@ -33,13 +33,12 @@ def join(ye, yo, xo):
 	return torch.cat((torch.cat((ye, yo), dim=2), xo), dim=3)
 
 class Filter(nn.Module):
-	def __init__(self, nch):#nch must end with 1
+	def __init__(self, kernel, nch):#nch must end with 1
 		super(Filter, self).__init__()
 
 		self.layers=nn.ModuleList()
 		for kl in range(len(nch)-1):
-			self.layers.add_module('conv%02d'%kl, nn.Conv2d(nch[kl], nch[kl+1], 7, 1, 3))	#3x3 conv
-			#self.layers.add_module('conv%02d'%kl, nn.Conv2d(nch[kl], nch[kl+1], 1))	#1x1 conv
+			self.layers.add_module('conv%02d'%kl, nn.Conv2d(nch[kl], nch[kl+1], kernel, 1, kernel//2))
 	def forward(self, x):
 		nlayers=len(self.layers)
 		x=nn.functional.leaky_relu(self.layers.conv00(x))
@@ -74,11 +73,18 @@ class Codec(nn.Module):
 		#self.pred_y=Predictor([1, nch, nch, nch, nch, nch, nch, nch, 1])
 
 		#C16_06		8L16C-res-7x7		1.6762@10
-		nch=16
-		self.predict_x=Filter([1, nch, nch, nch, nch, nch, nch, nch, 1])
-		self.update_x =Filter([1, nch, nch, nch, nch, nch, nch, nch, 1])
-		self.predict_y=Filter([1, nch, nch, nch, nch, nch, nch, nch, 1])
-		self.update_y =Filter([1, nch, nch, nch, nch, nch, nch, nch, 1])
+		#nch=16
+		#self.predict_x=Filter([1, nch, nch, nch, nch, nch, nch, nch, 1])
+		#self.update_x =Filter([1, nch, nch, nch, nch, nch, nch, nch, 1])
+		#self.predict_y=Filter([1, nch, nch, nch, nch, nch, nch, nch, 1])
+		#self.update_y =Filter([1, nch, nch, nch, nch, nch, nch, nch, 1])
+
+		#C16_07
+		nch=8
+		self.predict_x=Filter(5, [1, nch, nch, nch, 1])
+		self.update_x =Filter(5, [1, nch, nch, nch, 1])
+		self.predict_y=Filter(5, [1, nch, nch, nch, 1])
+		self.update_y =Filter(5, [1, nch, nch, nch, 1])
 
 
 		self.esum0=0#RMSE - before
@@ -105,23 +111,31 @@ class Codec(nn.Module):
 		y2o=y2o-self.predict_y(y2e)
 		y2e=y2e+self.update_y(y2o)
 
-		x3e, x3o=deinterleave_x(y2e)
-		x3o=x3o-self.predict_x(x3e)
-		x3e=x3e+self.update_x(x3o)
-		y3e, y3o=deinterleave_y(x3e)
-		y3o=y3o-self.predict_y(y3e)
-		y3e=y3e+self.update_y(y3o)
+		#x3e, x3o=deinterleave_x(y2e)
+		#x3o=x3o-self.predict_x(x3e)
+		#x3e=x3e+self.update_x(x3o)
+		#y3e, y3o=deinterleave_y(x3e)
+		#y3o=y3o-self.predict_y(y3e)
+		#x3e=x3e+self.update_y(x3o)
+		#
+		#x4e, x4o=deinterleave_x(y3e)
+		#x4o=x4o-self.predict_x(x4e)
+		#x4e=x4e+self.update_x(x4o)
+		#y4e, y4o=deinterleave_y(x4e)
+		#y4o=y4o-self.predict_y(y4e)
+		#x4e=x4e+self.update_y(x4o)
+		#
+		#x5e, x5o=deinterleave_x(y4e)
+		#x5o=x5o-self.predict_x(x5e)
+		#x5e=x5e+self.update_x(x5o)
+		#y5e, y5o=deinterleave_y(x5e)
+		#y5o=y5o-self.predict_y(y5e)
+		#x5e=x5e+self.update_y(x5o)
 
-		x4e, x4o=deinterleave_x(y3e)
-		x4o=x4o-self.predict_x(x4e)
-		x3e=x3e+self.update_x(x3o)
-		y4e, y4o=deinterleave_y(x4e)
-		y4o=y4o-self.predict_y(y4e)
-		y4e=y4e+self.update_y(y4o)
-
-		y3e=join(y4e, y4o, x4o)
-		y2e=join(y3e, y3o, x3o)
-		y1e=join(y2e, y2o, x2o)
+		#y4e   =join(y5e, y5o, x5o)
+		#y3e   =join(y4e, y4o, x4o)
+		#y2e   =join(y3e, y3o, x3o)
+		y1e   =join(y2e, y2o, x2o)
 		deltas=join(y1e, y1o, x1o)
 		deltas=torch.fmod(deltas+1, 2)-1	#[-1, 1]
 
