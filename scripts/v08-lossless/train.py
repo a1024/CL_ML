@@ -24,8 +24,8 @@ from torchsummary import summary
 
 ## config ##
 from codec16 import Codec
-modelname='C16_02'
-resume=1		# !!! SET RESUME=1 AFTER FIRST RUN !!!
+modelname='C16_06'
+resume=0		# !!! SET RESUME=1 AFTER FIRST RUN !!!
 save_records=0		# this wastes progress
 
 epochs=10
@@ -84,7 +84,7 @@ device_name='cpu'
 if not force_cpu and torch.cuda.is_available() and torch.cuda.device_count()>0:
 	use_cuda=1
 	device_name='cuda:0'
-print('%s  Epochs %d  %s  %s LR %f  WD %f  Batch %d  Crop %d  Records %d  Train on \'%s\'  Resume %d'%(time.strftime('%Y-%m-%d %H:%M:%S'), epochs, device_name, use_optim, lr, weight_decay, batch_size, train_crop, save_records, path_train, resume))
+print('%s  Epochs %d  %s  %s LR %f  WD %f  Batch %d  Crop %d  Records %d  Train on \'%s\'  %s'%(time.strftime('%Y-%m-%d %H:%M:%S'), epochs, device_name, use_optim, lr, weight_decay, batch_size, train_crop, save_records, path_train, 'resume' if resume else 'NEW'))
 device=torch.device(device_name)
 
 #if plot_grad:#https://stackoverflow.com/questions/61397176/how-to-keep-matplotlib-from-stealing-focus
