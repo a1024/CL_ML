@@ -23,16 +23,16 @@ from torchsummary import summary
 
 
 ## config ##
-from codec16 import Codec
-modelname='C16_06'
-resume=0		# !!! SET RESUME=1 AFTER FIRST RUN !!!
+from codec17 import Codec
+modelname='C17_01'
+resume=1		# !!! SET RESUME=1 AFTER FIRST RUN !!!
 save_records=0		# this wastes progress
 
 epochs=10
 use_optim='adam'	# use 'sgd' if got nan or overfit
 lr=0.001000		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6	#C01-L3C
-batch_size=4		#32, <=24, increase batch size instead of decreasing learning rate
+batch_size=2		#32, <=24, increase batch size instead of decreasing learning rate
 train_crop=512		#128, 192: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
