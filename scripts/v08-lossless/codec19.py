@@ -2,13 +2,13 @@ import torch
 from torch import nn
 import math
 
-#codec17-2023-11-22: multi-stage causal predictor
+#codec19-20231124: multi-pass recurrent self-attention causal predictor
 
 #Conv2d:		Dout = floor((Din + 2*padding - dilation*(kernel-1) - 1)/stride + 1)
 #ConvTranspose2d:	Dout = (Din-1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1
 
 def calc_RMSE(x):
-	return 255*torch.sqrt(torch.mean(torch.square(x)))
+	return 128*torch.sqrt(torch.mean(torch.square(x)))
 
 def calc_invCR(x):
 	entropy=0
@@ -25,49 +25,45 @@ def safe_inv(x):
 		return 1/x
 	return math.inf
 
+def median3(a, b, c):
+	return torch.max(torch.min(a, torch.max(b, c)), torch.min(b, c))
+
 class CausalConv(nn.Module):
-	def __init__(self, reach, nch, nlayers):# nlayers >= 2
+	def __init__(self, reach, curr, ci, co):#nch must end with 1
 		super(CausalConv, self).__init__()
 
 		self.reach=reach
-		self.conv00T=nn.Conv2d(1, nch, (reach, reach<<1|1))#(Kh, Kw)
-		self.conv00L=nn.Conv2d(1, nch, (1, reach), bias=False)
-
-		self.nlayers=nlayers
-		self.layers=nn.ModuleList()
-		for kl in range(1, nlayers-1):
-			self.layers.add_module('conv%02d'%kl, nn.Conv2d(nch, nch, 1))
-		self.layers.add_module('conv%02d'%(nlayers-1), nn.Conv2d(nch, 1, 1))
+		self.curr=curr
+		self.conv00T=nn.Conv2d(ci, co, (reach, reach<<1|1))#(Kh, Kw)
+		self.conv00L=nn.Conv2d(ci, co, (1, reach+curr), bias=False)
 	def forward(self, x):
 		xt=self.conv00T(nn.functional.pad(x[:, :, :-1, :], (self.reach, self.reach, self.reach, 0)))#(L, R, T, B)
-		xl=self.conv00L(nn.functional.pad(x[:, :, :, :-1], (self.reach, 0, 0, 0)))
-		x=nn.functional.leaky_relu(xt+xl)
+		xl=self.conv00L(nn.functional.pad(x[:, :, :, :(x.size(3) if self.curr else -1)], (self.reach, 0, 0, 0)))
+		return xt+xl
 
-		for kl in range(1, self.nlayers-1):
-			x=nn.functional.leaky_relu(self.layers.get_submodule('conv%02d'%kl)(x))
-		return torch.clamp(self.layers.get_submodule('conv%02d'%(self.nlayers-1))(x), -1, 1)
+class Predictor(nn.Module):
+	def __init__(self, nch):
+		super(Predictor, self).__init__()
 
-def pred_median3(x, a, b, c):
-	x=x-torch.max(torch.min(a, torch.max(b, c)), torch.min(b, c))
-	return torch.fmod(x+1, 2)-1		#[-1, 1]
+		self.conv00=CausalConv(1, 0, 1, nch)
+		self.conv01=CausalConv(1, 1, nch, nch)
+		self.conv02=CausalConv(1, 1, nch, nch)
+		self.conv03=CausalConv(1, 1, nch, 3)
+	def forward(self, x):
+		x=nn.functional.leaky_relu(self.conv00(x))
+		x=nn.functional.leaky_relu(self.conv01(x))
+		x=nn.functional.leaky_relu(self.conv02(x))
+		a, b, c=torch.split(torch.clamp(self.conv03(x), -1, 1), 1, dim=1)
+		return median3(a, b, c)
 
 class Codec(nn.Module):
 	def __init__(self):
 		super(Codec, self).__init__()
 		
 
-		#C17_01		R3-C32-L4	x1 pass		1.9414@10  1.9532@20  1.9579@30
-		#C17_02		R3-C32-L4	x2 passes	1.9725@10  1.9731@20  1.9690@30  1.9823@40  1.9804@50  1.9887@60  1.9705@70  1.9899@100
-		#C17_03		R3-C32-L4	x3 passes	1.7746@10  1.9678@20  1.9648@30
-		self.pred1a=CausalConv(3, 32, 4)
-		self.pred1b=CausalConv(3, 32, 4)
-		self.pred1c=CausalConv(3, 32, 4)
-		self.pred2a=CausalConv(3, 32, 4)
-		self.pred2b=CausalConv(3, 32, 4)
-		self.pred2c=CausalConv(3, 32, 4)
-		#self.pred3a=CausalConv(3, 32, 4)
-		#self.pred3b=CausalConv(3, 32, 4)
-		#self.pred3c=CausalConv(3, 32, 4)
+		#C19_01		1.9650@10  1.9733@20  1.9682@30
+		self.pred01=Predictor(16)
+		self.pred02=Predictor(16)
 
 
 		self.esum0=0#RMSE - before
@@ -78,12 +74,13 @@ class Codec(nn.Module):
 
 	def forward(self, x):
 		b, c, h, w=x.shape
-		x=x.view(b*c, 1, h, w)#a batch of channels, because of conv2d
-		deltas=x
+		b2=b*c
+		x=x.view(b2, 1, h, w)#a batch of channels, because of conv2d
 
-		deltas=pred_median3(deltas, self.pred1a(deltas), self.pred1b(deltas), self.pred1c(deltas))
-		deltas=pred_median3(deltas, self.pred2a(deltas), self.pred2b(deltas), self.pred2c(deltas))
-		#deltas=pred_median3(deltas, self.pred3a(deltas), self.pred3b(deltas), self.pred3c(deltas))
+
+		deltas=torch.fmod(x-self.pred01(x)+1, 2)-1		#[-1, 1]
+		deltas=torch.fmod(deltas-self.pred02(deltas)+1, 2)-1
+
 
 		loss1=calc_RMSE(deltas)
 

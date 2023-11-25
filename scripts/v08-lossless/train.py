@@ -14,7 +14,6 @@ import torchvision
 import json
 import time
 from datetime import timedelta
-#import matplotlib
 import matplotlib.pyplot as plt
 from torchsummary import summary
 #import nullcontext
@@ -23,9 +22,9 @@ from torchsummary import summary
 
 
 ## config ##
-from codec17 import Codec
-modelname='C17_01'
-resume=1		# !!! SET RESUME=1 AFTER FIRST RUN !!!
+from codec20 import Codec
+modelname='C20_02'
+resume=0		# !!! SET RESUME=1 AFTER FIRST RUN !!!
 save_records=0		# this wastes progress
 
 epochs=10
@@ -47,34 +46,42 @@ weight_decay=0#.0035	# increase if overfit
 
 justexportweights=0
 
-laptop=0
-if laptop:
-	path_train='C:/Projects/datasets/dataset-train'
-	path_val='C:/Projects/datasets/dataset-CLIC30'
-	path_test='C:/Projects/datasets/dataset-kodak'
+linux=0
+if linux:
+	fn_cache='cache-linux.txt'
+	path_train='/media/awm/30A481E0A481A944/datasets2/'
+	path_val='/media/awm/Toshiba/ML/dataset-CLIC30/'
+	path_test='/media/awm/Toshiba/ML/dataset-kodak/'
 else:
-	#path_train='C:/datasets'		# 167056 samples DON'T EXCEED CROP 255
-	path_train='C:/datasets2'		#    903 samples
-	#path_train='C:/datasets2/CLIC303'	#    303 samples WH 2048*1320
-	#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
-	#path_train='D:/ML/datasets-train/dataset-caltech256'
-	#path_train='D:/ML/dataset-openimages'
-	#path_train='D:/ML/dataset-openimages/images'
-	#path_train='D:/ML/dataset-CLIC'		# best at 1:1
-	#path_train='D:/ML/dataset-AWM'
-	#path_train='D:/ML/dataset-CLIC-small'
-	#path_train='D:/ML/dataset-AWM-small'
-	#path_train='D:/ML/dataset-CLIC30'	#30 samples
-	#path_train='D:/ML/dataset-natural'
-	#path_train='D:/ML/dataset-kodak'	#CHEAT
-	#path_train='D:/ML/dataset-kodim13'	#CHEAT
+	fn_cache='cache.txt'
+	laptop=0
+	if laptop:
+		path_train='C:/Projects/datasets/dataset-train'
+		path_val='C:/Projects/datasets/dataset-CLIC30'
+		path_test='C:/Projects/datasets/dataset-kodak'
+	else:
+		#path_train='C:/datasets'		# 167056 samples DON'T EXCEED CROP 255
+		path_train='C:/datasets2'		#    903 samples
+		#path_train='C:/datasets2/CLIC303'	#    303 samples WH 2048*1320
+		#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
+		#path_train='D:/ML/datasets-train/dataset-caltech256'
+		#path_train='D:/ML/dataset-openimages'
+		#path_train='D:/ML/dataset-openimages/images'
+		#path_train='D:/ML/dataset-CLIC'		# best at 1:1
+		#path_train='D:/ML/dataset-AWM'
+		#path_train='D:/ML/dataset-CLIC-small'
+		#path_train='D:/ML/dataset-AWM-small'
+		#path_train='D:/ML/dataset-CLIC30'	#30 samples
+		#path_train='D:/ML/dataset-natural'
+		#path_train='D:/ML/dataset-kodak'	#CHEAT
+		#path_train='D:/ML/dataset-kodim13'	#CHEAT
 
-	path_val='D:/ML/dataset-CLIC30'
-	#path_val='D:/ML/dataset-AWM-small'
-	#path_val=None
+		path_val='D:/ML/dataset-CLIC30'
+		#path_val='D:/ML/dataset-AWM-small'
+		#path_val=None
 
-	path_test='D:/ML/dataset-kodak'
-	#path_test='D:/ML/dataset-CLIC30'
+		path_test='D:/ML/dataset-kodak'
+		#path_test='D:/ML/dataset-CLIC30'
 
 
 
@@ -145,7 +152,7 @@ class GenericDataLoader(Dataset):#https://www.youtube.com/watch?v=ZoZHd0Zm3RY
 		self.path=path
 		self.filenames=[]
 
-		cachename=os.path.join(path, 'cache.txt')
+		cachename=os.path.join(path, fn_cache)
 		if is_test:
 			self.filenames=get_filenames(path, is_test)
 		else:
@@ -643,7 +650,7 @@ for x, fname in test_loader:		#TEST loop
 		loss, msg=calc_loss(x)
 		t2=time.time()
 
-		print('T%4d  %s  elapsed %9f sec'%(test_idx+1, msg, t2-t1))
+		print('%s  %s  elapsed %9f sec'%(fname, msg, t2-t1))
 
 		#if test_idx+1==21:#save preview
 		#	#sample=torch.cat((r, r2), dim=3)
