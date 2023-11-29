@@ -85,12 +85,25 @@ class Codec(nn.Module):
 		#self.cmid=16
 		#self.pred01=Predictor(2,         1, 32, self.cmid)
 		#self.pred02=Predictor(2, self.cmid, 32, self.cmid)
-		
 
-		#C20_02
-		self.cmid=1
-		self.pred01=Predictor(1,         1, 16, self.cmid)
-		self.pred02=Predictor(1, self.cmid, 16, self.cmid)
+		#C20_02		1.9692@30
+		#self.cmid=1
+		#self.pred01=Predictor(1,         1, 16, self.cmid)
+		#self.pred02=Predictor(1, self.cmid, 16, self.cmid)
+
+		#C20_03		1.9586@10  1.9780@20  1.9745@30  1.9756@40
+		#self.cmid=2
+		#self.pred01=Predictor(1,         1, 16, self.cmid)
+		#self.pred02=Predictor(1, self.cmid, 16, self.cmid)
+
+		#C20_04		
+		self.cmid=2
+		self.pred01a=Predictor(1,         1, 16, self.cmid)
+		self.pred01b=Predictor(1,         1, 16, self.cmid)
+		self.pred01c=Predictor(1,         1, 16, self.cmid)
+		self.pred02a=Predictor(1, self.cmid, 16, self.cmid)
+		self.pred02b=Predictor(1, self.cmid, 16, self.cmid)
+		self.pred02c=Predictor(1, self.cmid, 16, self.cmid)
 
 
 		self.esum0=0#RMSE - before
@@ -105,8 +118,8 @@ class Codec(nn.Module):
 		x=x.view(b2, 1, h, w)#a batch of channels, because of conv2d
 
 
-		deltas=torch.fmod(x.repeat(1, self.cmid, 1, 1)-self.pred01(x)+1, 2)-1		#[-1, 1]
-		deltas=torch.fmod(deltas-self.pred02(deltas)+1, 2)-1
+		deltas=torch.fmod(x.repeat(1, self.cmid, 1, 1)-median3(self.pred01a(x), self.pred01b(x), self.pred01c(x))+1, 2)-1		#[-1, 1]
+		deltas=torch.fmod(deltas-median3(self.pred02a(deltas), self.pred02b(deltas), self.pred02c(deltas))+1, 2)-1
 		#at train time	evaluate all deltas
 		#at test time	select smallest delta based on sum of causal neighbors
 

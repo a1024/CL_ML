@@ -23,26 +23,26 @@ from torchsummary import summary
 
 ## config ##
 from codec20 import Codec
-modelname='C20_02'
-resume=0		# !!! SET RESUME=1 AFTER FIRST RUN !!!
-save_records=0		# this wastes progress
+modelname='C20_04'
+resume=1		#!!! SET RESUME=1 AFTER FIRST RUN !!!
+save_records=0		#this wastes progress
 
 epochs=10
-use_optim='adam'	# use 'sgd' if got nan or overfit
+use_optim='adam'	#use 'sgd' if got nan or overfit
 lr=0.001000		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 #lr=0.00001*0.75**6	#C01-L3C
-batch_size=2		#32, <=24, increase batch size instead of decreasing learning rate
-train_crop=512		#128, 192: batch_size=8
+batch_size=32		#32, <=24, increase batch size instead of decreasing learning rate
+train_crop=128		#128, 192: batch_size=8
 cache_rebuild=0		#set to 1 if train_crop was changed
 shuffle=True
 reduce_lr_on_plateau=0	#slows down when validation flattens
-detect_anomalies=0	#enable for debugging CRASHES
 force_cpu=0		#GPU is faster
 
-clip_grad=1		# enable if got nan
+detect_anomalies=0	#enable for debugging CRASHES
+clip_grad=1		#enable if got nan
 model_summary=0
-plot_grad=0		# FOCUS-STEALING POP-UP		0 disabled   1 plot grad   2 plot log10 grad
-weight_decay=0#.0035	# increase if overfit
+plot_grad=0		#FOCUS-STEALING POP-UP		0 disabled   1 plot grad   2 plot log10 grad
+weight_decay=0#.0035	#increase if overfit
 
 justexportweights=0
 
@@ -60,8 +60,8 @@ else:
 		path_val='C:/Projects/datasets/dataset-CLIC30'
 		path_test='C:/Projects/datasets/dataset-kodak'
 	else:
-		#path_train='C:/datasets'		# 167056 samples DON'T EXCEED CROP 255
-		path_train='C:/datasets2'		#    903 samples
+		path_train='C:/datasets'		# 167056 samples DON'T EXCEED CROP 255
+		#path_train='C:/datasets2'		#    903 samples
 		#path_train='C:/datasets2/CLIC303'	#    303 samples WH 2048*1320
 		#path_train='D:/ML/datasets-train'	# caltech256 + flickr + imagenet1000
 		#path_train='D:/ML/datasets-train/dataset-caltech256'
@@ -372,8 +372,8 @@ if resume:
 	load_model(model, modelname+'.pth.tar')
 if use_cuda:
 	model=model.cuda()
-#if torch.__version__ >= version.parse('2.0.0'):#doesn't work on Windows yet
-#	model=torch.compile(model, mode='reduce-overhead')
+if linux and torch.__version__[0]>='2':#doesn't work on Windows yet
+	model=torch.compile(model, backend='tensorrt', mode='reduce-overhead')
 
 if justexportweights:
 	filename=modelname+'-'+time.strftime('%Y%m%d-%H%M%S')+'.txt'
