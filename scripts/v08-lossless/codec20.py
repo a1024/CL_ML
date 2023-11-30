@@ -59,6 +59,30 @@ class CausalConv(nn.Module):
 		xt=self.conv00T(nn.functional.pad(x[:, :, :-1, :], (self.reach, self.reach, self.reach, 0)))#(L, R, T, B)
 		xl=self.conv00L(nn.functional.pad(x[:, :, :, :(x.size(3) if self.curr else -1)], (self.reach, 0, 0, 0)))
 		return xt+xl
+	
+	def to_string(self, name):
+		s=''
+
+		s+='static const double '+name+'_w[]=\n'
+		s+='{\n'
+		for ko in range(self.conv00T.weight.shape[0]):
+			for ki in range(self.conv00T.weight.shape[1]):
+				filt=torch.cat((self.conv00T.weight[ko, ki].view(-1), self.conv00L.weight[ko, ki].view(-1)), dim=0)
+				s+='\t'
+				for val in filt:
+					s+=' %20.16f,'%val.item()
+				s+='\n'
+		s+='};\n'
+
+		s+='static const double '+name+'_b[]=\n'
+		s+='{\n'
+		s+='\t'
+		for val in self.conv00T.bias:
+			s+=' %20.16f,'%val.item()
+		s+='\n'
+		s+='};\n'
+
+		return s
 
 class Predictor(nn.Module):
 	def __init__(self, reach, ci, nch, co):
@@ -75,6 +99,14 @@ class Predictor(nn.Module):
 		x=nn.functional.leaky_relu(self.conv02(x))
 		a, b, c=torch.split(torch.clamp(self.conv03(x), -1, 1), self.co, dim=1)
 		return median3(a, b, c)
+	
+	def to_string(self, name):
+		s=''
+		s+=self.conv00.to_string(name+'_c0')
+		s+=self.conv01.to_string(name+'_c1')
+		s+=self.conv02.to_string(name+'_c2')
+		s+=self.conv03.to_string(name+'_c3')
+		return s
 
 class Codec(nn.Module):
 	def __init__(self):
@@ -96,7 +128,7 @@ class Codec(nn.Module):
 		#self.pred01=Predictor(1,         1, 16, self.cmid)
 		#self.pred02=Predictor(1, self.cmid, 16, self.cmid)
 
-		#C20_04		
+		#C20_04		4 lauers in Predictor, median3 x2		1.9584@10  1.9543@20  1.9978@20+2  1.9976@20+8  2.0060@20+18  2.0092@20+30
 		self.cmid=2
 		self.pred01a=Predictor(1,         1, 16, self.cmid)
 		self.pred01b=Predictor(1,         1, 16, self.cmid)
@@ -151,3 +183,13 @@ class Codec(nn.Module):
 		return invCR1, 'RMSE%8.4lf %8.4f  CR%6.4f %6.4f %6.4f'%(rmse0, rmse1, safe_inv(invCR0), safe_inv(invCR1), safe_inv(invCR1)*invCR0)
 	def checkpoint_msg(self):
 		pass
+
+	def to_string(self):
+		s=''
+		s+=self.pred01a.to_string('pred1a')
+		s+=self.pred01b.to_string('pred1b')
+		s+=self.pred01c.to_string('pred1c')
+		s+=self.pred02a.to_string('pred2a')
+		s+=self.pred02b.to_string('pred2b')
+		s+=self.pred02c.to_string('pred2c')
+		return s
