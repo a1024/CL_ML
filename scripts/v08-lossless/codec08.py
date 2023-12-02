@@ -65,7 +65,8 @@ class Codec(nn.Module):
 	def __init__(self):
 		super(Codec, self).__init__()
 
-		self.blocksize=2
+		self.blocksize=4
+
 		self.pred_c0=Predictor(self.blocksize)
 		self.pred_c1=Predictor(self.blocksize)
 		self.pred_c2=Predictor(self.blocksize)

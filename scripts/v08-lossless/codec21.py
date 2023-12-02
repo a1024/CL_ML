@@ -105,50 +105,40 @@ class Predictor(nn.Module):
 		self.conv00=CausalConv(reach, 0,  ci, nch)
 		self.conv01=CausalConv(reach, 1, nch, nch)
 		self.conv02=CausalConv(reach, 1, nch, nch)
-		self.conv03=CausalConv(reach, 1, nch, co*3)
+		self.conv03=CausalConv(reach, 1, nch, nch)
+		self.conv04=CausalConv(reach, 1, nch, nch)
+		self.conv05=CausalConv(reach, 1, nch, nch)
+		self.conv06=CausalConv(reach, 1, nch, nch)
+		self.conv07=CausalConv(reach, 1, nch, co*3)
 	def forward(self, x):
 		x=nn.functional.leaky_relu(self.conv00(x))
 		x=nn.functional.leaky_relu(self.conv01(x))
 		x=nn.functional.leaky_relu(self.conv02(x))
-		a, b, c=torch.split(torch.clamp(self.conv03(x), -1, 1), self.co, dim=1)
+		x=nn.functional.leaky_relu(self.conv03(x))
+		x=nn.functional.leaky_relu(self.conv04(x))
+		x=nn.functional.leaky_relu(self.conv05(x))
+		x=nn.functional.leaky_relu(self.conv06(x))
+		a, b, c=torch.split(torch.clamp(self.conv07(x), -1, 1), self.co, dim=1)
 		return median3(a, b, c)
 
-	def to_string(self, name):
-		s=''
-		s+=self.conv00.to_string(name+'_c0')
-		s+=self.conv01.to_string(name+'_c1')
-		s+=self.conv02.to_string(name+'_c2')
-		s+=self.conv03.to_string(name+'_c3')
-		return s
+	#def to_string(self, name):
+	#	s=''
+	#	s+=self.conv00.to_string(name+'_c0')
+	#	s+=self.conv01.to_string(name+'_c1')
+	#	s+=self.conv02.to_string(name+'_c2')
+	#	s+=self.conv03.to_string(name+'_c3')
+	#	return s
 
 class Codec(nn.Module):
 	def __init__(self):
 		super(Codec, self).__init__()
 
 
-		#C20_01		1.6170@10  1.7364@20
-		#self.cmid=16
-		#self.pred01=Predictor(2,         1, 32, self.cmid)
-		#self.pred02=Predictor(2, self.cmid, 32, self.cmid)
-
-		#C20_02		1.9692@30
-		#self.cmid=1
-		#self.pred01=Predictor(1,         1, 16, self.cmid)
-		#self.pred02=Predictor(1, self.cmid, 16, self.cmid)
-
-		#C20_03		1.9586@10  1.9780@20  1.9745@30  1.9756@40
-		#self.cmid=2
-		#self.pred01=Predictor(1,         1, 16, self.cmid)
-		#self.pred02=Predictor(1, self.cmid, 16, self.cmid)
-
-		#C20_04		4 layers in Predictor, median3 x2		1.9584@10  1.9543@20  1.9978@20+2  1.9976@20+8  2.0060@20+18  2.0092@20+30
+		#C21_01		1.9659@10
 		self.cmid=2
-		self.pred01a=Predictor(1,         1, 16, self.cmid)
-		self.pred01b=Predictor(1,         1, 16, self.cmid)
-		self.pred01c=Predictor(1,         1, 16, self.cmid)
-		self.pred02a=Predictor(1, self.cmid, 16, self.cmid)
-		self.pred02b=Predictor(1, self.cmid, 16, self.cmid)
-		self.pred02c=Predictor(1, self.cmid, 16, self.cmid)
+		self.pred01a=Predictor(1, 1, 16, 1)
+		self.pred01b=Predictor(1, 1, 16, 1)
+		self.pred01c=Predictor(1, 1, 16, 1)
 
 
 		self.esum0=0#RMSE - before
@@ -157,44 +147,44 @@ class Codec(nn.Module):
 		self.csum1=0#invCR - after
 		self.count=0
 
-	def fwd_debug(self, x):#
-		b, c, h, w=x.shape
-		b2=b*c
-		x=x.view(b2, 1, h, w)#a batch of channels, because of conv2d
-
-		inspect('x', x)
-
-		part1a=self.pred01a(x)
-		part1b=self.pred01b(x)
-		part1c=self.pred01c(x)
-		pred1=median3(part1a, part1b, part1c)
-		delta1=x-pred1
-		delta1=torch.fmod(delta1+1, 2)-1
-
-		inspect('part1a', part1a)
-		inspect('part1b', part1b)
-		inspect('part1c', part1c)
-		inspect('pred1', pred1)
-		inspect('x', x)
-		inspect('delta1', delta1)
-
-		part2a=self.pred02a(delta1)
-		part2b=self.pred02b(delta1)
-		part2c=self.pred02c(delta1)
-		pred2=median3(part2a, part2b, part2c)
-		delta2=delta1-pred2
-		delta2=torch.fmod(delta2+1, 2)-1
-
-		inspect('part2a', part2a)
-		inspect('part2b', part2b)
-		inspect('part2c', part2c)
-		inspect('pred2', pred2)
-		inspect('delta1', delta1)
-		inspect('delta2', delta2)
-
-		loss1=calc_RMSE(delta2)
-		cr=1/calc_min_invCR(delta2)
-		return loss1, 'MSG %f'%cr
+	#def fwd_debug(self, x):#
+	#	b, c, h, w=x.shape
+	#	b2=b*c
+	#	x=x.view(b2, 1, h, w)#a batch of channels, because of conv2d
+	#
+	#	inspect('x', x)
+	#
+	#	part1a=self.pred01a(x)
+	#	part1b=self.pred01b(x)
+	#	part1c=self.pred01c(x)
+	#	pred1=median3(part1a, part1b, part1c)
+	#	delta1=x-pred1
+	#	delta1=torch.fmod(delta1+1, 2)-1
+	#
+	#	inspect('part1a', part1a)
+	#	inspect('part1b', part1b)
+	#	inspect('part1c', part1c)
+	#	inspect('pred1', pred1)
+	#	inspect('x', x)
+	#	inspect('delta1', delta1)
+	#
+	#	part2a=self.pred02a(delta1)
+	#	part2b=self.pred02b(delta1)
+	#	part2c=self.pred02c(delta1)
+	#	pred2=median3(part2a, part2b, part2c)
+	#	delta2=delta1-pred2
+	#	delta2=torch.fmod(delta2+1, 2)-1
+	#
+	#	inspect('part2a', part2a)
+	#	inspect('part2b', part2b)
+	#	inspect('part2c', part2c)
+	#	inspect('pred2', pred2)
+	#	inspect('delta1', delta1)
+	#	inspect('delta2', delta2)
+	#
+	#	loss1=calc_RMSE(delta2)
+	#	cr=1/calc_min_invCR(delta2)
+	#	return loss1, 'MSG %f'%cr
 
 
 	def forward(self, x):
@@ -204,9 +194,6 @@ class Codec(nn.Module):
 
 
 		deltas=torch.fmod(x.repeat(1, self.cmid, 1, 1)-median3(self.pred01a(x), self.pred01b(x), self.pred01c(x))+1, 2)-1		#[-1, 1]
-		deltas=torch.fmod(deltas-median3(self.pred02a(deltas), self.pred02b(deltas), self.pred02c(deltas))+1, 2)-1
-		#at train time	evaluate all deltas
-		#at test time	select smallest delta based on sum of abs causal neighbors
 
 
 		loss1=calc_RMSE(deltas)
@@ -237,12 +224,12 @@ class Codec(nn.Module):
 	def checkpoint_msg(self):
 		pass
 
-	def to_string(self):
-		s=''
-		s+=self.pred01a.to_string('pred1a')
-		s+=self.pred01b.to_string('pred1b')
-		s+=self.pred01c.to_string('pred1c')
-		s+=self.pred02a.to_string('pred2a')
-		s+=self.pred02b.to_string('pred2b')
-		s+=self.pred02c.to_string('pred2c')
-		return s
+	#def to_string(self):
+	#	s=''
+	#	s+=self.pred01a.to_string('pred1a')
+	#	s+=self.pred01b.to_string('pred1b')
+	#	s+=self.pred01c.to_string('pred1c')
+	#	s+=self.pred02a.to_string('pred2a')
+	#	s+=self.pred02b.to_string('pred2b')
+	#	s+=self.pred02c.to_string('pred2c')
+	#	return s

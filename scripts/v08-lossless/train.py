@@ -24,13 +24,12 @@ if __name__ == '__main__':
 	#freeze_support()
 
 	## config ##
-	from codec20 import Codec
-	modelname='C20_04'
-	resume=1		#!!! SET RESUME=1 AFTER FIRST RUN !!!
-	save_records=0		#this wastes progress
+	from codec21 import Codec
+	modelname='C21_01'
+	resume=0		#!!! SET RESUME=1 AFTER FIRST RUN !!!
 
-	num_workers=8		#set to zero for debugging in VSCode
-	epochs=10
+	num_workers=8	#8	#set to zero for debugging in VSCode
+	epochs=10	#10
 	use_optim='adam'	#use 'sgd' if got nan or overfit
 	lr=0.000100		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 	#lr=0.00001*0.75**6	#C01-L3C
@@ -40,6 +39,7 @@ if __name__ == '__main__':
 	shuffle=True
 	reduce_lr_on_plateau=0	#slows down when validation flattens
 	force_cpu=0		#GPU is faster
+	save_records=0		#this wastes progress
 
 	detect_anomalies=0	#enable for debugging CRASHES
 	clip_grad=1		#enable if got nan
@@ -371,6 +371,7 @@ def calc_loss(x):
 	x=torch.fmod(x+1, 2)-1		#[-1, 1]
 
 	return model(x)
+	#return model.fwd_debug(x)#
 
 
 
@@ -383,6 +384,8 @@ if __name__=='__main__':
 		device_name='cuda:0'
 	print('%s  Epochs %d  %s  %s LR %f  WD %f  Batch %d  Crop %d  Records %d  Train on \'%s\'  %s'%(time.strftime('%Y-%m-%d %H:%M:%S'), epochs, device_name, use_optim, lr, weight_decay, batch_size, train_crop, save_records, path_train, 'resume' if resume else 'NEW'))
 	device=torch.device(device_name)
+
+	Image.MAX_IMAGE_PIXELS=None
 
 	#if plot_grad:#https://stackoverflow.com/questions/61397176/how-to-keep-matplotlib-from-stealing-focus
 	#	matplotlib.use('Qt5agg')
