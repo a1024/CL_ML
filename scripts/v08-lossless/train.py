@@ -24,12 +24,12 @@ if __name__ == '__main__':
 	#freeze_support()
 
 	## config ##
-	from codec21 import Codec
-	modelname='C21_01'
-	resume=0		#!!! SET RESUME=1 AFTER FIRST RUN !!!
+	from codec23 import Codec
+	modelname='C23_01'
+	resume=1		#!!! SET RESUME=1 AFTER FIRST RUN !!!
 
-	num_workers=8	#8	#set to zero for debugging in VSCode
-	epochs=10	#10
+	num_workers=0		#set to zero for debugging in VSCode
+	epochs=10
 	use_optim='adam'	#use 'sgd' if got nan or overfit
 	lr=0.000100		#always start with high learning rate (0.005 for Adam, 0.1 for SGD), bumping up lr later loses progress
 	#lr=0.00001*0.75**6	#C01-L3C
@@ -57,7 +57,7 @@ if __name__ == '__main__':
 		path_test='/media/awm/Toshiba/ML/dataset-kodak/'
 	else:
 		fn_cache='cache.txt'
-		laptop=0
+		laptop=1
 		if laptop:
 			path_train='C:/Projects/datasets/dataset-train'
 			path_val='C:/Projects/datasets/dataset-CLIC30'
@@ -371,7 +371,6 @@ def calc_loss(x):
 	x=torch.fmod(x+1, 2)-1		#[-1, 1]
 
 	return model(x)
-	#return model.fwd_debug(x)#
 
 
 
@@ -386,7 +385,7 @@ if __name__=='__main__':
 	device=torch.device(device_name)
 
 	Image.MAX_IMAGE_PIXELS=None
-
+	
 	#if plot_grad:#https://stackoverflow.com/questions/61397176/how-to-keep-matplotlib-from-stealing-focus
 	#	matplotlib.use('Qt5agg')
 
@@ -479,6 +478,7 @@ if __name__=='__main__':
 				print('%6d/%6d =%6.2f%%  %s'%(k+1, nval, 100*(k+1)/nval, msg), end='\r')
 			val_loss, val_msg=model.epoch_end()
 		print('E%4d [%10f,%10f]  V %s  elapsed %10f '%(0, 0, 0, val_msg, (time.time()-start)/60))
+		min_loss=val_loss
 
 	for epoch in range(epochs):		#TRAIN loop
 		it=0
